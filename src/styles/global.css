@@ -653,6 +653,8 @@ html.theme-switching::view-transition-new(root) {
   border: 1px solid var(--line);
   border-radius: 6px 2px 6px 2px;
   padding: 0.1em 0.4em;
+  /* long inline code wraps instead of forcing sideways page scroll */
+  overflow-wrap: break-word;
 }
 
 .prose pre {
@@ -661,6 +663,10 @@ html.theme-switching::view-transition-new(root) {
   background: var(--paper-2);
   border: 1.5px solid var(--line);
   border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  /* wrap long lines (keeping indentation) instead of scrolling sideways,
+     which is unreadable on phones; overflow-x: auto stays as a last resort */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   overflow-x: auto;
   font-size: 0.84rem;
 }
@@ -692,6 +698,11 @@ html.theme-switching::view-transition-new(root) {
   margin-bottom: 0.9rem;
   border-collapse: collapse;
   font-size: 0.92rem;
+  /* keep wide tables inside their own scroll box so the page never pans
+     sideways on phones */
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .prose th,
@@ -777,12 +788,23 @@ html.theme-switching::view-transition-new(root) {
     font-size: 0.95rem;
   }
 
+  /* give the page a little more breathing room on narrow screens */
+  .page {
+    padding: 0 1.1rem;
+  }
+
   .hero h1 {
     font-size: 1.65rem;
   }
 
   .post__header h1 {
     font-size: 1.5rem;
+  }
+
+  /* a touch smaller code so more fits per line on phones */
+  .prose pre {
+    font-size: 0.72rem;
+    padding: 0.7rem 0.75rem;
   }
 
   .site-head__inner {
