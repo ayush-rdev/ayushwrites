@@ -8,9 +8,9 @@ export const SITE = {
   /** Your name — used in the hero and footer */
   author: 'Ayush',
   /** Short line used in meta descriptions + RSS feed */
-  description: 'a tiny blog about building things, slowly.',
+  description: 'Personal blog of Ayush(me)(⁠ ⁠◜⁠‿⁠◝⁠ ⁠)⁠♡',
   /** Canonical site URL (also used in astro.config.mjs) */
-  url: 'https://ayush-rdev.github.io',
+  url: 'https://ayush-rdev.github.io/ayushwrites',
   /** Language of the site, for the <html lang> attribute */
   lang: 'en',
 } as const;
