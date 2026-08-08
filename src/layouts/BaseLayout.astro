@@ -56,7 +56,7 @@ const pageAnim = {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="generator" content={Astro.generator} />
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="theme-color" content="#faf3e4" />
     <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
     <link rel="alternate" type="application/rss+xml" title={SITE.title} href={`${base}rss.xml`} />
 
@@ -83,7 +83,7 @@ const pageAnim = {
         document.documentElement.dataset.theme = theme;
         var meta = document.querySelector('meta[name="theme-color"]');
         if (meta) {
-          meta.setAttribute('content', theme === 'dark' ? '#16130f' : '#ffffff');
+          meta.setAttribute('content', theme === 'dark' ? '#16130f' : '#faf3e4');
         }
 
         // Astro's router rebuilds <html> attributes on navigation, so hand the
@@ -95,7 +95,7 @@ const pageAnim = {
           newDoc.documentElement.setAttribute('data-theme', current);
           var m = newDoc.querySelector('meta[name="theme-color"]');
           if (m) {
-            m.setAttribute('content', current === 'dark' ? '#16130f' : '#ffffff');
+            m.setAttribute('content', current === 'dark' ? '#16130f' : '#faf3e4');
           }
         });
       })();

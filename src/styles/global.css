@@ -14,14 +14,14 @@
 /* ── palette · light (default) ─────────────── */
 
 :root {
-  --paper: #ffffff;
-  --paper-2: #f6f0e3;
+  --paper: #faf3e4; /* soft warm cream, not stark white */
+  --paper-2: #f3e9d6;
   --ink: #2c2620;
-  --ink-soft: #6d6356;
+  --ink-soft: #6e6353;
   --accent: #dd6b3d; /* bright terracotta — strokes & decorations */
   --accent-text: #a34e26; /* darker terracotta — accent-colored text (AA contrast) */
   --accent-2: #4f6e4f;
-  --line: #e2d7c2;
+  --line: #e3d6bd;
   --shadow: rgba(44, 38, 32, 0.14);
 
   /* hand-drawn squiggle tiles (link underlines & dividers) */
