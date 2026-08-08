@@ -15,14 +15,14 @@ falling back to an instant (and reduced-motion-friendly) swap.
 
 All colors live as CSS custom properties at the top of
 `src/styles/global.css` — the light palette on `:root`, the dark palette on
-`:root[data-theme='dark']`.
-
-## page transitions
+`:root[data-theme='dark']`.## page transitions
 
 Navigating between pages uses Astro's [`<ClientRouter />`](https://docs.astro.build/en/guides/view-transitions/)
-view transitions — content slides while the header/footer crossfade. The
-current theme is handed to each incoming page via `astro:before-swap`, so
-it never flickers during navigation.
+view transitions. The header and footer persist across navigations (no
+flicker) while the content crossfades with a gentle upward drift, and internal
+links are prefetched as soon as they enter the viewport — so navigation feels
+instant. The current theme is handed to each incoming page via
+`astro:before-swap`, so it never flickers either.
 
 ## quickstart
 
@@ -64,8 +64,8 @@ npm run preview   # preview the production build
    frontmatter: `title`, `description`, `pubDate`. Optional: `tags`,
    `updatedDate`, `draft` (hides the post).
 4. **Tune the look** — all colors, fonts, and quirks are CSS custom properties
-   at the top of `src/styles/global.css`. The handwritten font (Caveat) loads
-   from Google Fonts with graceful fallbacks.
+   at the top of `src/styles/global.css`.The handwritten font (Caveat) is self-hosted via
+`@fontsource/caveat` — zero third-party requests.
 
 ## deploying
 

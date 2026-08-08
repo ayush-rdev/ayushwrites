@@ -4,10 +4,10 @@ import { BASE, SITE } from '../consts';
 const base = BASE;
 const year = new Date().getFullYear();
 ---
-<footer class="site-foot">
+<footer class="site-foot" transition:persist>
   <span>© {year} {SITE.author} · made by hand · no trackers</span>
   <span>
-    <a href={`${base}rss.xml`} data-astro-reload>rss</a>
+    <a href={`${base}rss.xml`} data-astro-reload data-astro-prefetch="false">rss</a>
     <span aria-hidden="true"> · </span>
     <a href="#top">back to top ↑</a>
   </span>

@@ -63,4 +63,53 @@ const prettyUpdated = updatedDate?.toLocaleDateString('en-US', {
       <a href={base}>all writings →</a>
     </footer>
   </article>
+
+  <script is:inline>
+    (function () {
+      // a slim reading-progress bar along the very top of the page
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      // clear listeners/bar left over from a previous post page visit
+      if (window.__rpCleanup) window.__rpCleanup();
+
+      var bar = document.createElement('div');
+      bar.className = 'reading-progress';
+      bar.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(bar);
+
+      var ticking = false;
+      function update() {
+        ticking = false;
+        var doc = document.documentElement;
+        var total = doc.scrollHeight - window.innerHeight;
+        var pct = total > 0 ? (window.scrollY / total) * 100 : 0;
+        bar.style.width = pct + '%';
+      }
+      function onScroll() {
+        if (!ticking) {
+          ticking = true;
+          requestAnimationFrame(update);
+        }
+      }
+
+      window.addEventListener('scroll', onScroll, { passive: true });
+      window.addEventListener('resize', onScroll, { passive: true });
+      window.__rpCleanup = function () {
+        window.removeEventListener('scroll', onScroll);
+        window.removeEventListener('resize', onScroll);
+        if (bar.parentNode) bar.parentNode.removeChild(bar);
+      };
+      update();
+
+      // single shared handler: whenever we land on a page with no progress
+      // bar, drop any listeners/bar left over from a previous post page
+      if (!window.__rpBound) {
+        window.__rpBound = true;
+        document.addEventListener('astro:page-load', function () {
+          if (!document.querySelector('.reading-progress') && window.__rpCleanup) {
+            window.__rpCleanup();
+          }
+        });
+      }
+    })();
+  </script>
 </BaseLayout>

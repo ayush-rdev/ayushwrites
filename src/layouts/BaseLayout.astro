@@ -3,6 +3,12 @@ import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 import { ClientRouter } from 'astro:transitions';
 import { BASE, SITE } from '../consts';
+// self-hosted handwritten font — no third-party requests, no render-blocking
+// external stylesheet (bundled + hashed by Astro, latin-only subsets since
+// the site is English-only)
+import '@fontsource/caveat/latin-400.css';
+import '@fontsource/caveat/latin-500.css';
+import '@fontsource/caveat/latin-700.css';
 import '../styles/global.css';
 
 interface Props {
@@ -17,18 +23,28 @@ const {
 
 const base = BASE;
 const pageTitle = title === SITE.title ? SITE.title : `${title} — ${SITE.title}`;
-// note: no og:image by default — add a real 1200×630 image later
-// if you want rich link previews on social platforms
 
-// a gentle symmetric fade — no directional slide, easy on the eyes
+// a soft crossfade with a gentle upward drift — unhurried enough to feel
+// smooth, fast enough to stay out of the way (the easing curve decelerates
+// like a sheet of paper settling into place)
 const pageAnim = {
   forwards: {
-    old: { name: 'vt-fade-out', duration: '0.12s', easing: 'ease-out', fillMode: 'both' },
-    new: { name: 'vt-fade-up-in', duration: '0.2s', easing: 'ease-out', fillMode: 'both' },
+    old: { name: 'vt-fade-out', duration: '0.15s', easing: 'ease-in', fillMode: 'both' },
+    new: {
+      name: 'vt-fade-up-in',
+      duration: '0.4s',
+      easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+      fillMode: 'both',
+    },
   },
   backwards: {
-    old: { name: 'vt-fade-out', duration: '0.12s', easing: 'ease-out', fillMode: 'both' },
-    new: { name: 'vt-fade-up-in', duration: '0.2s', easing: 'ease-out', fillMode: 'both' },
+    old: { name: 'vt-fade-out', duration: '0.15s', easing: 'ease-in', fillMode: 'both' },
+    new: {
+      name: 'vt-fade-up-in',
+      duration: '0.4s',
+      easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+      fillMode: 'both',
+    },
   },
 };
 ---
@@ -40,7 +56,7 @@ const pageAnim = {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="generator" content={Astro.generator} />
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#faf6ee" />
+    <meta name="theme-color" content="#ffffff" />
     <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
     <link rel="alternate" type="application/rss+xml" title={SITE.title} href={`${base}rss.xml`} />
 
@@ -53,14 +69,6 @@ const pageAnim = {
     <meta property="og:description" content={description} />
     <meta property="og:url" content={`${SITE.url}${base}`} />
 
-    <!-- the one font we load: Caveat, for hand-drawn accents -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap"
-      rel="stylesheet"
-    />
-
     <title>{pageTitle}</title>
 
     <!-- set the theme before first paint, so there's no flash of the wrong one -->
@@ -70,12 +78,12 @@ const pageAnim = {
         try {
           stored = localStorage.getItem('theme');
         } catch (e) {}
-        // light is the default; dark only if the visitor explicitly chose it
+        // white is the default; dark only if the visitor explicitly chose it
         var theme = stored === 'dark' ? 'dark' : 'light';
         document.documentElement.dataset.theme = theme;
         var meta = document.querySelector('meta[name="theme-color"]');
         if (meta) {
-          meta.setAttribute('content', theme === 'dark' ? '#16130f' : '#faf6ee');
+          meta.setAttribute('content', theme === 'dark' ? '#16130f' : '#ffffff');
         }
 
         // Astro's router rebuilds <html> attributes on navigation, so hand the
@@ -87,7 +95,7 @@ const pageAnim = {
           newDoc.documentElement.setAttribute('data-theme', current);
           var m = newDoc.querySelector('meta[name="theme-color"]');
           if (m) {
-            m.setAttribute('content', current === 'dark' ? '#16130f' : '#faf6ee');
+            m.setAttribute('content', current === 'dark' ? '#16130f' : '#ffffff');
           }
         });
       })();
