@@ -31,7 +31,7 @@ const posts = (await getCollection('blog', ({ data }) => !data.draft)).sort(
 
   {posts.map((post) => <PostCard post={post} />)}
 
-  <p style="text-align: center; margin-top: 1.8rem;">
+  <p style="text-align: center; margin-top: 1.3rem;">
     <a href={`${base}about`}>more about me →</a>
   </p>
 </BaseLayout>
