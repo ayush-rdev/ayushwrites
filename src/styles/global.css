@@ -148,15 +148,19 @@ a:hover {
   position: sticky;
   top: 0;
   z-index: 90;
-  /* softly blurred frosted glass that merges into the page */
-  background: color-mix(in srgb, var(--paper) 82%, transparent);
-  backdrop-filter: blur(8px) saturate(1.1);
-  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+  /* near-opaque cream: fully readable with no backdrop-filter — blurring
+     the page behind a sticky bar on every scroll frame is the classic
+     cause of scroll jank, so we keep the merged look with the vignette
+     mask + soft shadow instead */
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
   /* vignette: the bottom edge fades out instead of ending hard, so the bar
      melts into the content scrolling beneath it */
   -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
   box-shadow: 0 14px 28px -20px var(--shadow);
+  /* promote the header to its own compositor layer so the hide/show slide
+     stays on the GPU */
+  will-change: transform;
   transition:
     transform 0.4s cubic-bezier(0.22, 1, 0.36, 1),
     visibility 0s,
