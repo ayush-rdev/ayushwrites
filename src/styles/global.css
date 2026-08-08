@@ -25,8 +25,8 @@
   --shadow: rgba(44, 38, 32, 0.14);
 
   /* hand-drawn squiggle tiles (link underlines & dividers) */
-  --squiggle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='6' viewBox='0 0 14 6'%3E%3Cpath d='M0 3 Q 3.5 0, 7 3 T 14 3' fill='none' stroke='%232c2620' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
-  --squiggle-accent: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='6' viewBox='0 0 14 6'%3E%3Cpath d='M0 3 Q 3.5 0, 7 3 T 14 3' fill='none' stroke='%23dd6b3d' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
+  --squiggle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='4' viewBox='0 0 14 4'%3E%3Cpath d='M0 2 Q 3.5 4, 7 2 T 14 2' fill='none' stroke='%232c2620' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
+  --squiggle-accent: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='4' viewBox='0 0 14 4'%3E%3Cpath d='M0 2 Q 3.5 4, 7 2 T 14 2' fill='none' stroke='%23dd6b3d' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
 
   /* faint paper grain */
   --noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.3'/%3E%3C/svg%3E");
@@ -47,8 +47,8 @@
   --line: #3a332a;
   --shadow: rgba(0, 0, 0, 0.55);
 
-  --squiggle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='6' viewBox='0 0 14 6'%3E%3Cpath d='M0 3 Q 3.5 0, 7 3 T 14 3' fill='none' stroke='%23e9e2d4' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
-  --squiggle-accent: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='6' viewBox='0 0 14 6'%3E%3Cpath d='M0 3 Q 3.5 0, 7 3 T 14 3' fill='none' stroke='%23e8824f' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
+  --squiggle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='4' viewBox='0 0 14 4'%3E%3Cpath d='M0 2 Q 3.5 4, 7 2 T 14 2' fill='none' stroke='%23e9e2d4' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
+  --squiggle-accent: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='4' viewBox='0 0 14 4'%3E%3Cpath d='M0 2 Q 3.5 4, 7 2 T 14 2' fill='none' stroke='%23e8824f' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
 
   --noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.3'/%3E%3C/svg%3E");
 
@@ -98,9 +98,11 @@ a {
   text-decoration: none;
   background-image: var(--squiggle);
   background-repeat: repeat-x;
-  background-position: 0 calc(100% - 2px);
-  background-size: 14px 6px;
-  padding-bottom: 2px;
+  /* the squiggle sits just below the text so it never slices through
+     descenders (g, y, j...) */
+  background-position: 0 calc(100% - 1px);
+  background-size: 14px 4px;
+  padding-bottom: 5px;
   transition: color 0.2s ease;
 }
 
@@ -393,7 +395,7 @@ html.theme-switching::view-transition-new(root) {
   background-image: var(--squiggle-accent);
   background-repeat: repeat-x;
   background-position: 0 calc(100% - 1px);
-  background-size: 14px 6px;
+  background-size: 14px 4px;
   padding-bottom: 4px;
 }
 
@@ -585,7 +587,7 @@ html.theme-switching::view-transition-new(root) {
   background-image: var(--squiggle);
   background-repeat: repeat-x;
   background-position: 0 100%;
-  background-size: 14px 6px;
+  background-size: 14px 4px;
   padding-bottom: 0.3rem;
 }
 
@@ -678,7 +680,7 @@ html.theme-switching::view-transition-new(root) {
   margin: 1.8rem 0;
   background-image: var(--squiggle-accent);
   background-repeat: repeat-x;
-  background-size: 14px 6px;
+  background-size: 14px 4px;
   background-position: center;
 }
 
