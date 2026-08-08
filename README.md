@@ -1,0 +1,114 @@
+# my corner — a tiny indie blog
+
+A minimal, hand-drawn-flavored personal blog built with [Astro](https://astro.build).
+Just words on paper — plus a tiny script for the light/dark switch (hand-drawn
+light theme, professional dark theme) with a circular-reveal animation, and
+smooth client-side page transitions.
+
+## themes
+
+The 🌙 button in the header switches between light and dark. **Light is the
+default**; choosing dark once remembers it in `localStorage`. The switch
+animates with a circular reveal via the
+[View Transitions API](https://developer.mozilla.org/en-US/docs/Web/API/View_Transitions_API),
+falling back to an instant (and reduced-motion-friendly) swap.
+
+All colors live as CSS custom properties at the top of
+`src/styles/global.css` — the light palette on `:root`, the dark palette on
+`:root[data-theme='dark']`.
+
+## page transitions
+
+Navigating between pages uses Astro's [`<ClientRouter />`](https://docs.astro.build/en/guides/view-transitions/)
+view transitions — content slides while the header/footer crossfade. The
+current theme is handed to each incoming page via `astro:before-swap`, so
+it never flickers during navigation.
+
+## quickstart
+
+```bash
+npm install
+npm run dev       # → http://localhost:4321
+npm run build     # static site into dist/
+npm run preview   # preview the production build
+```
+
+## structure
+
+```
+.
+├── astro.config.mjs          # site URL + sitemap integration
+├── public/
+│   └── favicon.svg           # hand-drawn asterisk
+└── src/
+    ├── consts.ts             # ✏️ site title, author, description — edit me first
+    ├── content.config.ts     # blog collection schema (frontmatter validation)
+    ├── content/blog/         # ✏️ write posts here as .md files
+    ├── styles/global.css     # all the indie/hand-drawn styling lives here
+    ├── layouts/BaseLayout.astro
+    ├── components/           # Header, Footer, PostCard, Squiggle divider
+    └── pages/
+        ├── index.astro       # homepage (hero + latest writings)
+        ├── about.astro       # bio + colophon
+        ├── now.astro         # classic indie-web "now" page
+        ├── posts/[...slug].astro  # single-post pages (auto-generated)
+        ├── rss.xml.js        # RSS feed at /rss.xml
+        └── 404.astro
+```
+
+## make it yours
+
+1. **`src/consts.ts`** — your name, site title, description, and real domain.
+2. **`astro.config.mjs`** — set `site` to your real domain (used by sitemap + RSS).
+3. **Write posts** — drop Markdown files in `src/content/blog/`. Required
+   frontmatter: `title`, `description`, `pubDate`. Optional: `tags`,
+   `updatedDate`, `draft` (hides the post).
+4. **Tune the look** — all colors, fonts, and quirks are CSS custom properties
+   at the top of `src/styles/global.css`. The handwritten font (Caveat) loads
+   from Google Fonts with graceful fallbacks.
+
+## deploying
+
+**GitHub Pages (recommended — free):** this project is already configured as
+a project page — `site` + `base` are set in `astro.config.mjs` and every
+internal link uses the base-aware `BASE` helper from `src/consts.ts`.
+
+1. Push the repository to GitHub (the repo must be **public** on the free plan):
+
+   ```bash
+   git remote add origin git@github.com:ayush-rdev/ayushwrites.git   # or https://github.com/ayush-rdev/ayushwrites.git
+   git push -u origin main
+   ```
+
+2. In the repository's **Settings → Pages**, set Source to **GitHub Actions**.
+
+The site builds and publishes on every push at
+`https://ayush-rdev.github.io/ayushwrites/`. If you later rename the repo,
+update `base` in `astro.config.mjs` to match (and change `SITE.url` in
+`src/consts.ts`).
+
+That's it — the included workflow (`.github/workflows/deploy.yml`) builds and
+publishes on every push, so future `git push`es update the site automatically.
+
+Any other static host works too (Netlify, Cloudflare Pages, Vercel, a $5 VPS,
+a USB stick handed to a friend...). Build command: `npm run build`, output:
+`dist/`.
+
+### on your local network (phone access)
+
+Serve the built site to every device on your Wi-Fi:
+
+```bash
+npm run build
+npm run network   # serves dist/ on 0.0.0.0:4322
+```
+
+Then open `http://<your-machine-ip>:4322` from your phone. Find the IP with
+`hostname -I` on Linux or `ipconfig` on Windows/macOS. Two gotchas:
+
+- The phone must be on the **same network** as this machine.
+- If this runs inside a VM/container, the IP your phone sees is the *host*
+machine's address — forward port 4322 to the container if needed.
+
+To stop the server, kill the process (`Ctrl+C` if foregrounded, or
+`pkill -f 'astro preview'`).

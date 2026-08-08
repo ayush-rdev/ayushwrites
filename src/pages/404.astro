@@ -1,0 +1,15 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { BASE } from '../consts';
+
+const base = BASE;
+---
+<BaseLayout title="not found">
+  <section class="notfound">
+    <p class="big">404</p>
+    <p>this page wandered off into the woods and didn't come back.</p>
+    <p style="margin-top: 1.6rem;">
+      <a href={base}>→ back to the corner</a>
+    </p>
+  </section>
+</BaseLayout>

@@ -1,0 +1,20 @@
+---
+interface Props {
+  /** flip the squiggle upside-down for variety */
+  flip?: boolean;
+}
+
+const { flip = false } = Astro.props;
+---
+
+<svg
+  class:list={['squiggle-divider', { 'squiggle-divider--flip': flip }]}
+  viewBox="0 0 400 18"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2.5"
+  stroke-linecap="round"
+  aria-hidden="true"
+>
+  <path d="M4 10 C 26 4, 48 16, 72 10 S 116 4, 140 10 S 184 16, 208 10 S 252 4, 276 10 S 320 16, 344 10 S 380 6, 396 10" />
+</svg>

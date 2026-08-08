@@ -1,0 +1,37 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import PostCard from '../components/PostCard.astro';
+import Squiggle from '../components/Squiggle.astro';
+import { BASE, SITE } from '../consts';
+import { getCollection } from 'astro:content';
+
+const base = BASE;
+const posts = (await getCollection('blog', ({ data }) => !data.draft)).sort(
+  (a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf(),
+);
+---
+<BaseLayout>
+  <section class="hero">
+    <p class="hello">hello there, i'm</p>
+    <h1>
+      <span class="em">{SITE.author}</span> — and this is my little corner of the web.
+    </h1>
+    <p class="lede">
+      {SITE.description} No algorithms, no noise — just notes,
+      half-baked ideas, and the occasional finished thing.
+    </p>
+  </section>
+
+  <Squiggle />
+
+  <div class="section-title">
+    <span class="hand" aria-hidden="true">✎</span>
+    <h2>latest writings</h2>
+  </div>
+
+  {posts.map((post) => <PostCard post={post} />)}
+
+  <p style="text-align: center; margin-top: 1.8rem;">
+    <a href={`${base}about`}>more about me →</a>
+  </p>
+</BaseLayout>

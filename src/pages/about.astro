@@ -1,0 +1,47 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Squiggle from '../components/Squiggle.astro';
+import { BASE } from '../consts';
+---
+<BaseLayout title="about">
+  <article class="post">
+    <header class="post__header">
+      <h1>about me</h1>
+      <p class="post__meta">a very short introduction</p>
+    </header>
+
+    <Squiggle />
+
+    <div class="prose">
+      <p>
+        Write a few lines about yourself here — who you are, what you
+        make, and what this blog is for. Keep it honest, keep it short.
+      </p>
+      <p>
+        This is placeholder text. Go edit <code>src/pages/about.astro</code>
+        and make it yours.
+      </p>
+      <blockquote>“a blog is a conversation you have with the future you.”</blockquote>
+    </div>
+
+    <div class="sticker" style="margin-top: 1.5rem;">
+      also see: <a href={`${BASE}now`}>what i'm doing now →</a>
+    </div>
+
+    <section style="margin-top: 2.5rem;">
+      <div class="section-title">
+        <span class="hand" aria-hidden="true">✎</span>
+        <h2>colophon</h2>
+      </div>
+      <div class="box">
+        <p>
+          This site is built by hand with
+          <a href="https://astro.build">Astro</a>, set in Georgia &amp; Caveat,
+          and hosted wherever you decide. No trackers, no cookies — just
+          words, plus a tiny script for the light/dark switch and smooth
+          page transitions.
+        </p>
+      </div>
+    </section>
+  </article>
+</BaseLayout>

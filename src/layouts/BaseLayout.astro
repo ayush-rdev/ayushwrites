@@ -1,0 +1,108 @@
+---
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { ClientRouter } from 'astro:transitions';
+import { BASE, SITE } from '../consts';
+import '../styles/global.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = SITE.title,
+  description = SITE.description,
+} = Astro.props;
+
+const base = BASE;
+const pageTitle = title === SITE.title ? SITE.title : `${title} — ${SITE.title}`;
+// note: no og:image by default — add a real 1200×630 image later
+// if you want rich link previews on social platforms
+
+// a gentle symmetric fade — no directional slide, easy on the eyes
+const pageAnim = {
+  forwards: {
+    old: { name: 'vt-fade-out', duration: '0.12s', easing: 'ease-out', fillMode: 'both' },
+    new: { name: 'vt-fade-up-in', duration: '0.2s', easing: 'ease-out', fillMode: 'both' },
+  },
+  backwards: {
+    old: { name: 'vt-fade-out', duration: '0.12s', easing: 'ease-out', fillMode: 'both' },
+    new: { name: 'vt-fade-up-in', duration: '0.2s', easing: 'ease-out', fillMode: 'both' },
+  },
+};
+---
+
+<!doctype html>
+<html lang={SITE.lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#faf6ee" />
+    <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
+    <link rel="alternate" type="application/rss+xml" title={SITE.title} href={`${base}rss.xml`} />
+
+    <!-- client-side page transitions -->
+    <ClientRouter />
+
+    <!-- open graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={`${SITE.url}${base}`} />
+
+    <!-- the one font we load: Caveat, for hand-drawn accents -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <title>{pageTitle}</title>
+
+    <!-- set the theme before first paint, so there's no flash of the wrong one -->
+    <script is:inline>
+      (function () {
+        var stored = null;
+        try {
+          stored = localStorage.getItem('theme');
+        } catch (e) {}
+        // light is the default; dark only if the visitor explicitly chose it
+        var theme = stored === 'dark' ? 'dark' : 'light';
+        document.documentElement.dataset.theme = theme;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) {
+          meta.setAttribute('content', theme === 'dark' ? '#16130f' : '#faf6ee');
+        }
+
+        // Astro's router rebuilds <html> attributes on navigation, so hand the
+        // current theme to the incoming document before it gets swapped in
+        document.addEventListener('astro:before-swap', function (event) {
+          var current = document.documentElement.dataset.theme || 'light';
+          var newDoc = event.newDocument;
+          if (!newDoc) return;
+          newDoc.documentElement.setAttribute('data-theme', current);
+          var m = newDoc.querySelector('meta[name="theme-color"]');
+          if (m) {
+            m.setAttribute('content', current === 'dark' ? '#16130f' : '#faf6ee');
+          }
+        });
+      })();
+    </script>
+  </head>
+  <body id="top">
+    <a class="skip-link" href="#main">skip to content</a>
+    <Header />
+    <main
+      class="page"
+      id="main"
+      transition:animate={pageAnim}
+    >
+      <slot />
+    </main>
+    <Footer />
+  </body>
+</html>

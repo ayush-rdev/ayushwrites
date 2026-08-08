@@ -1,0 +1,66 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Squiggle from '../../components/Squiggle.astro';
+import { BASE } from '../../consts';
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog', ({ data }) => !data.draft);
+  return posts.map((post) => ({
+    params: { slug: post.id },
+    props: { post },
+  }));
+}
+
+const base = BASE;
+const { post } = Astro.props;
+const { Content } = await render(post);
+const { title, description, pubDate, updatedDate, tags } = post.data;
+
+const prettyDate = pubDate.toLocaleDateString('en-US', {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+});
+
+const prettyUpdated = updatedDate?.toLocaleDateString('en-US', {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+});
+---
+<BaseLayout title={title} description={description}>
+  <article class="post">
+    <p class="post__back">
+      <a href={base}>← back to writings</a>
+    </p>
+
+    <header class="post__header">
+      <h1>{title}</h1>
+      <div class="post__meta">
+        <time datetime={pubDate.toISOString()}>{prettyDate}</time>
+        {prettyUpdated && <span>· updated {prettyUpdated}</span>}
+        {
+          tags.length > 0 && (
+            <div class="tags">
+              {tags.map((tag) => (
+                <span class="tag">#{tag}</span>
+              ))}
+            </div>
+          )
+        }
+      </div>
+    </header>
+
+    <Squiggle />
+
+    <div class="prose">
+      <Content />
+    </div>
+
+    <footer class="post__foot">
+      <p class="hand">thanks for reading ✳</p>
+      <a href={base}>all writings →</a>
+    </footer>
+  </article>
+</BaseLayout>
