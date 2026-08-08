@@ -128,5 +128,47 @@ const links = [
       window.__themeToggleBound = true;
       document.addEventListener('astro:after-swap', initToggle);
     }
+
+    // hide the sticky header while scrolling down; glide it back on scroll up
+    if (!window.__headScrollBound) {
+      window.__headScrollBound = true;
+      // keep the nav pinned in place for folks who prefer reduced motion
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      var head = document.querySelector('.site-head');
+      if (head) {
+        var lastY = window.scrollY;
+        var ticking = false;
+
+        function update() {
+          ticking = false;
+          var y = window.scrollY;
+          if (y <= 10) {
+            // at (or near) the top — always keep the header visible
+            head.classList.remove('site-head--hidden');
+          } else if (y > lastY + 10) {
+            head.classList.add('site-head--hidden');
+          } else if (y < lastY - 10) {
+            head.classList.remove('site-head--hidden');
+          }
+          lastY = y;
+        }
+
+        function onScroll() {
+          if (!ticking) {
+            ticking = true;
+            requestAnimationFrame(update);
+          }
+        }
+
+        window.addEventListener('scroll', onScroll, { passive: true });
+
+        // after a page transition the new page starts at a fresh scroll
+        // position — reset the direction tracker and reveal the header
+        window.addEventListener('astro:page-load', function () {
+          lastY = window.scrollY;
+          head.classList.remove('site-head--hidden');
+        });
+      }
+    }
   })();
 </script>

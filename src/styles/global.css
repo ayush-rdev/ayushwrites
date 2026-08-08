@@ -152,7 +152,25 @@ a:hover {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
-  transition: background-color 0.3s ease, border-color 0.3s ease;
+  transition:
+    transform 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s,
+    background-color 0.3s ease,
+    border-color 0.3s ease;
+}
+
+/* slide the header away while scrolling down, bring it back on scroll up.
+   visibility flips to hidden only after the slide-out finishes (so the
+   off-screen nav links can't be tabbed into) and snaps back instantly on
+   slide-in */
+.site-head--hidden {
+  transform: translateY(-100%);
+  visibility: hidden;
+  transition:
+    transform 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 0.4s,
+    background-color 0.3s ease,
+    border-color 0.3s ease;
 }
 
 .site-head__inner {
