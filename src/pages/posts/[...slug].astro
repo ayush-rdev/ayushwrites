@@ -2,10 +2,11 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Squiggle from '../../components/Squiggle.astro';
 import { BASE } from '../../consts';
+import { isPublished } from '../../lib/posts';
 import { getCollection, render } from 'astro:content';
 
 export async function getStaticPaths() {
-  const posts = await getCollection('blog', ({ data }) => !data.draft);
+  const posts = await getCollection('blog', isPublished);
   return posts.map((post) => ({
     params: { slug: post.id },
     props: { post },

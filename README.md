@@ -48,7 +48,8 @@ npm run preview   # preview the production build
     ├── styles/global.css     # all the indie/hand-drawn styling lives here
     ├── layouts/BaseLayout.astro
     ├── components/           # Header, Footer, PostCard, Squiggle divider
-    ├── scripts/admin/        # the /admin SPA (app.js, github.js, content.js)
+    ├── scripts/admin/        # the /admin SPA (app.js, github.js, content.js, editor-tools.js)
+    ├── lib/posts.ts          # isPublished filter (drafts + scheduled posts)
     └── pages/
         ├── index.astro       # homepage (hero + latest writings)
         ├── about.astro       # bio + colophon
@@ -70,43 +71,55 @@ npm run preview   # preview the production build
    at the top of `src/styles/global.css`.The handwritten font (Caveat) is self-hosted via
 `@fontsource/caveat` — zero third-party requests.
 
-## admin (hidden back office)
+## admin (professional back office)
 
-There's a small admin app at **`/admin`** (not linked from the nav, and
-`noindex`'d). It manages the blog straight from the browser through the
-GitHub API — no server, no database:
+There's a full admin app at **`/admin`** (not linked from the nav, `noindex`'d)
+that manages the whole blog straight from the browser through the GitHub API —
+no server, no database. Light/dark themes, keyboard-driven, with a sidebar
+layout like any modern SaaS dashboard:
 
-- **dashboard** — post stats, recent writings, live deploy status of the
-  GitHub Actions workflow
-- **posts** — create, edit, delete, duplicate, search, filter, and flip
-  publish/draft for every post
-- **editor** — title, dates, slug, tags, draft toggle, description, and a
-  markdown body with a **rich formatting toolbar** (bold, italic,
-  strikethrough, headings, lists, quotes, links, code blocks, tables, HR),
-  keyboard shortcuts (Ctrl+B/I/E, Ctrl+Shift+X/L/1-3, Ctrl+Enter to save),
-  write / preview / split modes,
-  word count + reading time, fullscreen, and copy/download
-- **images** — add images to any post or the now page via the 🖼 button,
-  drag-and-drop, or paste; they're uploaded to `public/images/` and committed
-  together with your save
+- **dashboard** — stats (total / published / scheduled / drafts / words),
+  quick actions, recent writings, live deploy status of the Actions workflow
+- **posts** — create, edit, delete, duplicate, search, filter by
+  published / scheduled / drafts, and one-click publish⇄draft toggling
+- **editor** — a full **WYSIWYG studio** (Toast UI): rich toolbar (bold,
+  italic, headings, lists, quotes, links, code, tables, HR…), markdown source
+  view, live word count + reading time, drafts, slugs, tags, copy & download
+- **images** — media library with upload / delete / copy-markdown; add images
+  to any post via the 🖼 button, drag-and-drop, or paste — uploaded to
+  `public/images/` and committed atomically with your save
+- **pages & files** — browse and edit every text file in the repo
+  (`about.astro`, `global.css`, configs…) right from the browser
+- **tags** — see every tag with counts, filter by tag, rename or remove a tag
+  across all posts in one commit
+- **import / export** — download all posts as a .zip (fflate), or bulk-import
+  .md files with a review step before committing
+- **deploy** — live workflow-run history and a one-click "rebuild & deploy"
+  button
 - **settings** — the `SITE` fields in `src/consts.ts` (title, author,
   description)
-- **now** — the `/now` page content, now stored in `src/content/now/now.md`
+- **now** — the `/now` page content, stored in `src/content/now/now.md`
 
-Every save is **one commit to the repo** (the git data API) — including any
-images you've attached — which triggers the deploy workflow; publish from
-the browser, site updates in about a minute.
+**Scheduled publishing:** give a post a future date and it's marked
+`scheduled` — hidden at build time (via `src/lib/posts.ts`) until its
+publish date, then published automatically by the deploy workflow's daily
+rebuild (`.github/workflows/deploy.yml` runs twice a day in UTC).
+
+Every save is **one atomic commit** to the repo (the git data API) —
+including any attached images — which triggers the deploy workflow; publish
+from the browser, site updates in about a minute.
 
 **One-time setup:** open `/admin`, paste a GitHub **personal access token**
 with contents read & write on this repo (a
 [fine-grained token](https://github.com/settings/personal-access-tokens/new)
-scoped to this repo, or a classic token with `repo` scope). The token lives
-only in your browser's `localStorage` and talks to `api.github.com`
-directly. Use the **lock** button in the admin to forget it.
+scoped to this repo — a classic token with broad scopes gets flagged by the
+admin). The token lives only in your browser's `localStorage` and talks to
+`api.github.com` directly; use the **lock** button to forget it.
 
-The admin's code lives in `src/pages/admin.astro` (shell + styles) and
-`src/scripts/admin/` (`app.js` SPA, `github.js` API client,
-`content.js` frontmatter/consts helpers).
+The admin's code lives in `src/pages/admin.astro` (shell) +
+`src/styles/admin.css` (design system), and `src/scripts/admin/`
+(`app.js` SPA, `github.js` API client, `content.js` frontmatter/consts
+helpers, `editor-tools.js` image pipeline).
 
 ## deploying
 

@@ -1,15 +1,20 @@
 // ─────────────────────────────────────────────
 //  my corner — admin app.
-//  A tiny hash-routed SPA that manages the blog
-//  straight from the browser via the GitHub API:
-//  create/edit/delete posts, site settings and
-//  the now page. Every save is a commit to the
-//  repo, and the existing GitHub Actions workflow
-//  deploys it.
+//  A hash-routed SPA that manages the whole blog
+//  from the browser via the GitHub API: posts,
+//  images, files, tags, site settings, the now
+//  page, import/export and deploys. Every save
+//  is a commit to the repo, and the deploy
+//  workflow runs it.
 // ─────────────────────────────────────────────
 
+import Editor from '@toast-ui/editor';
+import '@toast-ui/editor/dist/toastui-editor.css';
+import '@toast-ui/editor/dist/theme/toastui-editor-dark.css';
+import { zipSync, strToU8 } from 'fflate';
+
 import { GitHub } from './github.js';
-import { setupRichEditor, insertText, fileToBase64, baseName, MAX_IMAGE_BYTES } from './editor-tools.js';
+import { fileToBase64, baseName, imagePathFor, MAX_IMAGE_BYTES } from './editor-tools.js';
 import {
   parseFrontmatter,
   buildPostMarkdown,
@@ -19,7 +24,6 @@ import {
   readConsts,
   writeConsts,
 } from './content.js';
-import { marked } from 'marked';
 import { SITE } from '../../consts';
 
 // ── base path ('/ayushwrites/') ──────────────
@@ -36,9 +40,8 @@ function el(tag, attrs = {}, ...children) {
     if (v === null || v === undefined || v === false) continue;
     if (k === 'class') node.className = v;
     else if (k === 'html') node.innerHTML = v;
-    else if (k.startsWith('on') && typeof v === 'function') {
-      node.addEventListener(k.slice(2), v);
-    } else if (v === true) node.setAttribute(k, '');
+    else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
+    else if (v === true) node.setAttribute(k, '');
     else node.setAttribute(k, v);
   }
   for (const c of children.flat(Infinity)) {
@@ -49,29 +52,11 @@ function el(tag, attrs = {}, ...children) {
 }
 
 // ── localStorage (wrapped so private mode can't crash us) ──
-const KEYS = {
-  token: 'mc_admin_token',
-  owner: 'mc_admin_owner',
-  repo: 'mc_admin_repo',
-};
+const KEYS = { token: 'mc_admin_token', owner: 'mc_admin_owner', repo: 'mc_admin_repo' };
 const store = {
-  get(k) {
-    try {
-      return localStorage.getItem(k) ?? '';
-    } catch {
-      return '';
-    }
-  },
-  set(k, v) {
-    try {
-      localStorage.setItem(k, v);
-    } catch {}
-  },
-  clear() {
-    try {
-      Object.values(KEYS).forEach((k) => localStorage.removeItem(k));
-    } catch {}
-  },
+  get(k) { try { return localStorage.getItem(k) ?? ''; } catch { return ''; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  clear() { try { Object.values(KEYS).forEach((k) => localStorage.removeItem(k)); } catch {} },
 };
 
 // ── state ────────────────────────────────────
@@ -81,13 +66,37 @@ const state = {
   settings: null, // { path, content }
   now: null, // { path, data, body }
   clone: null, // duplicated-post source for the "new" editor
+  tree: null, // cached repo file listing
   dirty: false,
   lastHash: '#/dashboard',
-  scopeWarn: null, // over-broad classic scopes on the connected token
+  scopeWarn: null,
 };
 
-// scopes a token does NOT need for this admin — its presence means the token
-// has far more power than a blog editor should
+// true while a commit is in flight — blocks double-submits
+let actionBusy = false;
+
+const ui = {
+  postsFilter: 'all',
+  postsQuery: '',
+  importItems: [],
+};
+
+// live ToastUI editor instances (for theme syncing)
+const editors = new Set();
+// editors currently attached to the rendered view — destroyed on re-render
+let activeEditors = [];
+
+function disposeEditors() {
+  for (const e of activeEditors) {
+    try {
+      e.destroy();
+    } catch {}
+    editors.delete(e);
+  }
+  activeEditors = [];
+}
+
+// scopes a token does NOT need for this admin
 const BROAD_SCOPES = [
   'admin:enterprise', 'admin:gpg_key', 'admin:org', 'admin:org_hook',
   'admin:public_key', 'admin:repo_hook', 'admin:ssh_signing_key',
@@ -95,34 +104,6 @@ const BROAD_SCOPES = [
   'gist', 'notifications', 'project', 'workflow', 'write:discussion',
   'write:network_configurations', 'write:packages',
 ];
-
-// true while a commit is in flight — blocks double-submits
-let actionBusy = false;
-
-// ── fullscreen editor ────────────────────────
-let fsCard = null;
-function exitFullscreen() {
-  if (fsCard) {
-    fsCard.classList.remove('a-fs');
-    fsCard = null;
-  }
-  document.body.classList.remove('a-fs-active');
-}
-function toggleFullscreen(card) {
-  if (fsCard && fsCard !== card) return;
-  fsCard = fsCard ? null : card;
-  document.body.classList.toggle('a-fs-active', !!fsCard);
-  card.classList.toggle('a-fs', !!fsCard);
-  if (fsCard) fsCard.scrollTop = 0;
-}
-
-const ui = {
-  postsFilter: 'all',
-  postsQuery: '',
-  mode: 'write',
-  newSlugTouched: false,
-  tab: 'dashboard',
-};
 
 // ── toasts ───────────────────────────────────
 function toast(msg, kind = 'info') {
@@ -132,8 +113,8 @@ function toast(msg, kind = 'info') {
   box.append(t);
   setTimeout(() => {
     t.classList.add('a-toast--out');
-    setTimeout(() => t.remove(), 380);
-  }, 3800);
+    setTimeout(() => t.remove(), 300);
+  }, 4200);
 }
 
 // ── small utils ──────────────────────────────
@@ -152,24 +133,35 @@ function relTime(iso) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function renderMd(md) {
+function fmtSize(b) {
+  if (b < 1024) return `${b} B`;
+  if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / 1048576).toFixed(2)} MB`;
+}
+
+function isFutureDate(d) {
+  if (!d) return false;
+  // compare in UTC like the build does, so the admin badge matches the site
+  const t = new Date(`${d}T00:00:00Z`);
+  return !Number.isNaN(t.getTime()) && t.getTime() > Date.now();
+}
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function copyText(text) {
   try {
-    // own content, but harden the preview anyway: drop scripts, iframes,
-    // event-handler attributes and javascript: URLs
-    return marked
-      .parse(md || '')
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
-      .replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-      .replace(/(href|src)\s*=\s*(['"])javascript:/gi, '$1=$2about:');
+    await navigator.clipboard.writeText(text);
+    return true;
   } catch {
-    return '<p><em>could not render preview</em></p>';
+    return false;
   }
 }
 
 // ── connect / auth ───────────────────────────
 function lockVisible(on) {
-  $('#a-lock').hidden = !on;
+  $('#a-lock-wrap').hidden = !on;
   $('#a-shell').hidden = on;
 }
 
@@ -199,14 +191,12 @@ async function connect(silent = false) {
     store.set(KEYS.owner, owner);
     store.set(KEYS.repo, repo);
 
-    // warn if a classic token arrives with way more power than this needs
     const scopes = (gh.lastScopes || '').split(',').map((s) => s.trim()).filter(Boolean);
     state.scopeWarn = scopes.filter((s) => BROAD_SCOPES.includes(s));
     if (state.scopeWarn.length === 0) state.scopeWarn = null;
-    if (state.scopeWarn) {
-      toast('⚠️ This token has very broad scopes — consider a fine-grained token', 'error');
-    }
+    if (state.scopeWarn) toast('⚠️ This token has very broad scopes — consider a fine-grained one', 'error');
 
+    $('#a-repo-line').textContent = `${owner}/${repo} · ${gh.branch}`;
     if (!silent) toast(`connected as @${me.login} — ${owner}/${repo}`, 'success');
     lockVisible(false);
     if (!location.hash) location.hash = '#/dashboard';
@@ -230,7 +220,6 @@ async function loadAll() {
       state.gh.getTextFile('src/content/now/now.md').catch(() => null),
     ]);
 
-    // one unreadable post shouldn't take the whole admin down
     const entries = await Promise.all(
       dir.filter((f) => /\.mdx?$/.test(f.name)).map(async (f) => {
         try {
@@ -254,6 +243,7 @@ async function loadAll() {
     } else {
       state.now = null;
     }
+    state.tree = null; // refetch on next media/files view
     renderRoute();
   } catch (e) {
     toast(e.message || 'could not load the repo', 'error');
@@ -267,13 +257,14 @@ function setBusy(on) {
   if (!view) return;
   view.classList.toggle('a-view--busy', on);
   const bar = view.querySelector('.a-busy');
-  if (on && !bar) view.prepend(el('p', { class: 'a-busy' }, 'reading the repo…'));
+  if (on && !bar) view.prepend(el('p', { class: 'a-busy' }, 'working…'));
   else if (!on && bar) bar.remove();
 }
 
 // ── routing ──────────────────────────────────
 function currentRoute() {
-  const h = location.hash.replace(/^#\/?/, '');
+  let h = location.hash.replace(/^#\/?/, '');
+  if (h.startsWith('file/')) return { view: 'file', arg: decodeURIComponent(h.slice(5)) };
   const [view, ...rest] = h.split('/');
   return { view: view || 'dashboard', arg: decodeURIComponent(rest.join('/')) };
 }
@@ -281,18 +272,13 @@ function currentRoute() {
 let guardRevert = false;
 function onHashChange() {
   if (guardRevert) {
-    // this is the hash change from restoring the editor after a cancelled
-    // leave — the DOM still holds the editor with its unsaved values, so
-    // don't re-render (that would wipe them)
     guardRevert = false;
     return;
   }
   const prevHash = state.lastHash || '#/dashboard';
-  state.lastHash = location.hash;
   if (state.dirty) {
     const ok = window.confirm('You have unsaved changes. Discard them?');
     if (!ok) {
-      // restore the editor's URL without rebuilding its DOM
       if (prevHash !== location.hash) {
         guardRevert = true;
         location.hash = prevHash;
@@ -301,6 +287,9 @@ function onHashChange() {
     }
     state.dirty = false;
   }
+  // only record the hash once navigation is accepted, so a cancelled
+  // navigation can't poison the revert target
+  state.lastHash = location.hash;
   renderRoute();
 }
 
@@ -308,116 +297,164 @@ function renderRoute() {
   const viewEl = $('#a-view');
   if (!state.gh || !viewEl) return;
   const { view, arg } = currentRoute();
-  ui.tab = view === 'edit' || view === 'new' ? 'posts' : view;
-  syncTabs();
+  disposeEditors(); // no editor should outlive its view
+  ui.tab =
+    view === 'edit' || view === 'new' ? 'posts' :
+    view === 'file' ? 'files' : view;
+  syncNav();
 
   if (view === 'posts') renderPosts(viewEl);
-  else if (view === 'new') renderEditor(viewEl, null);
-  else if (view === 'edit') renderEditor(viewEl, arg);
+  else if (view === 'new' || view === 'edit') renderEditor(viewEl, view === 'edit' ? arg : null);
+  else if (view === 'media') renderMedia(viewEl);
+  else if (view === 'files') renderFiles(viewEl);
+  else if (view === 'file') renderFile(viewEl, arg);
+  else if (view === 'tags') renderTags(viewEl);
+  else if (view === 'tools') renderTools(viewEl);
+  else if (view === 'deploy') renderDeploy(viewEl);
   else if (view === 'settings') renderSettings(viewEl);
   else if (view === 'now') renderNow(viewEl);
   else renderDashboard(viewEl);
 }
 
-function syncTabs() {
-  document.querySelectorAll('.a-tab').forEach((a) => {
-    const active = a.dataset.view === ui.tab;
-    a.classList.toggle('a-tab--active', active);
+function syncNav() {
+  document.querySelectorAll('.a-nav').forEach((a) => {
+    a.classList.toggle('a-nav--active', a.dataset.view === ui.tab);
   });
+}
+
+// ── ToastUI editor helper ────────────────────
+function createEditor({ container, value, onChange, onImage }) {
+  const editor = new Editor({
+    el: container,
+    height: 'auto',
+    minHeight: '460px',
+    initialEditType: 'markdown',
+    previewStyle: 'vertical',
+    initialValue: value || '',
+    placeholder: 'write here… (markdown or rich text)',
+    hideModeSwitch: false,
+    usageStatistics: false,
+  });
+  if (onChange) editor.on('change', onChange);
+  if (onImage) {
+    editor.addHook('addImageBlobHook', (blob, callback) => {
+      Promise.resolve(onImage(blob))
+        .then((res) => {
+          if (res) callback(res.url, res.alt);
+        })
+        .catch((e) => toast(e.message || 'image upload failed', 'error'));
+    });
+  }
+  syncEditorTheme(editor);
+  editors.add(editor);
+  activeEditors.push(editor);
+  return editor;
+}
+
+function syncEditorTheme(editor) {
+  try {
+    editor.getRootElement().classList.toggle(
+      'toastui-editor-dark',
+      document.documentElement.dataset.theme === 'dark',
+    );
+  } catch {}
 }
 
 // ── dashboard ────────────────────────────────
 function renderDashboard(viewEl) {
   const posts = state.posts;
-  const published = posts.filter((p) => !p.data.draft);
+  const published = posts.filter((p) => !p.data.draft && !isFutureDate(p.data.pubDate));
+  const scheduled = posts.filter((p) => !p.data.draft && isFutureDate(p.data.pubDate));
   const drafts = posts.filter((p) => p.data.draft);
   const words = posts.reduce((n, p) => n + countWords(p.body), 0);
   const latest = posts[0]?.data.pubDate;
 
   const stat = (label, n, sub) =>
-    el(
-      'div',
-      { class: 'a-stat' },
+    el('div', { class: 'a-stat' },
       el('span', { class: 'a-stat__num' }, String(n)),
       el('span', { class: 'a-stat__label' }, label),
       sub ? el('span', { class: 'a-stat__sub' }, sub) : null,
     );
 
-  const recent = posts.slice(0, 3).map((p) =>
-    el(
-      'a',
-      { class: 'a-row a-row--link', href: `#/edit/${encodeURIComponent(p.id)}` },
+  const recent = posts.slice(0, 4).map((p) =>
+    el('a', { class: 'a-row a-row--link', href: `#/edit/${encodeURIComponent(p.id)}` },
       el('div', { class: 'a-row__main' },
         el('span', { class: 'a-row__title' }, p.data.title || p.id),
-        p.data.draft ? el('span', { class: 'a-badge a-badge--draft' }, 'draft') : null),
+        p.data.draft ? el('span', { class: 'a-badge a-badge--draft' }, 'draft') : null,
+      ),
       el('div', { class: 'a-row__date' }, pretty(p.data.pubDate)),
     ),
   );
 
   viewEl.replaceChildren(
+    pageHead('dashboard', 'overview', [
+      el('button', { class: 'a-btn a-btn--primary', onclick: () => (location.hash = '#/new') }, '✍ new post'),
+    ]),
+
     state.scopeWarn
       ? el('div', { class: 'a-warn' },
           el('strong', {}, '⚠️ This token has far more power than the admin needs'),
           el('p', { class: 'a-note' },
-            `It carries scopes like ${state.scopeWarn.join(', ')}. If it has ever been pasted into a chat, a config file, or anywhere else, revoke it now at github.com/settings/tokens. The admin only needs a `,
-            el('strong', {}, 'fine-grained token'),
-            ' with Contents: read & write on this one repo — that also keeps it useless if it ever leaks.',
+            `It carries scopes like ${state.scopeWarn.join(', ')}. If it has ever been pasted into a chat or config, revoke it now at github.com/settings/tokens. A fine-grained token with Contents: read & write on this repo is all the admin needs.`,
           ),
         )
       : null,
 
     el('div', { class: 'a-stats' },
       stat('writings', posts.length, 'in the repo'),
-      stat('published', published.length),
-      stat('drafts', drafts.length),
-      stat('words', words.toLocaleString(), latest ? `latest ${pretty(latest)}` : ''),
+      stat('published', published.length, latest ? `latest ${pretty(latest)}` : ''),
+      stat('scheduled', scheduled.length, 'auto-publish on date'),
+      stat('drafts', drafts.length, 'hidden from listings'),
+      stat('words', words.toLocaleString(), 'across all posts'),
     ),
 
     el('div', { class: 'a-grid-2' },
       el('div', { class: 'a-card' },
-        el('h2', { class: 'a-h2' }, 'quick actions'),
+        el('div', { class: 'a-card__head' },
+          el('h2', {}, 'quick actions'),
+          el('a', { class: 'a-out', href: '#/deploy' }, 'deploy →'),
+        ),
         el('div', { class: 'a-btn-row' },
-          el('button', { class: 'a-btn a-btn--accent', onclick: () => (location.hash = '#/new') }, '✍ new post'),
-          el('button', { class: 'a-btn', onclick: () => (location.hash = '#/settings') }, 'site settings'),
-          el('button', { class: 'a-btn', onclick: () => (location.hash = '#/now') }, 'now page'),
+          el('button', { class: 'a-btn', onclick: () => (location.hash = '#/media') }, '🖼 media library'),
+          el('button', { class: 'a-btn', onclick: () => (location.hash = '#/files') }, '📄 pages & files'),
+          el('button', { class: 'a-btn', onclick: () => (location.hash = '#/tools') }, '🧰 import / export'),
         ),
         el('p', { class: 'a-note' },
-          'Every save is one commit to ',
-          el('strong', {}, `${state.gh.owner}/${state.gh.repo}`),
-          ' on ', el('strong', {}, state.gh.branch),
-          ' — the GitHub Actions workflow then builds and deploys (usually under a minute).',
+          `Every save is one commit to `, el('strong', {}, `${state.gh.owner}/${state.gh.repo}`),
+          ` on `, el('strong', {}, state.gh.branch),
+          ` — the deploy workflow builds and publishes in about a minute.`,
         ),
       ),
 
       el('div', { class: 'a-card' },
         el('div', { class: 'a-card__head' },
-          el('h2', { class: 'a-h2' }, 'deploy'),
-          el('button', { class: 'a-mini', title: 'refresh', onclick: refreshDeploy }, '↻'),
+          el('h2', {}, 'latest deploy'),
+          el('button', { class: 'a-mini', title: 'refresh', onclick: refreshDeployCard }, '↻'),
         ),
-        el('div', { class: 'a-deploy-body', id: 'a-deploy' }, el('p', { class: 'a-note' }, '…')),
+        el('div', { id: 'a-deploy-mini' }, el('p', { class: 'a-note' }, '…')),
       ),
     ),
 
     posts.length > 0
       ? el('div', { class: 'a-card' },
           el('div', { class: 'a-card__head' },
-            el('h2', { class: 'a-h2' }, 'recent writings'),
+            el('h2', {}, 'recent writings'),
             el('a', { class: 'a-out', href: '#/posts' }, 'all posts →'),
           ),
-          ...recent,
+          el('div', { class: 'a-list' }, ...recent),
         )
       : el('div', { class: 'a-card' },
-          el('h2', { class: 'a-h2' }, 'no posts yet'),
+          el('div', { class: 'a-card__head' }, el('h2', {}, 'no posts yet')),
           el('p', { class: 'a-note' }, 'Write your first one — the corner is waiting.'),
-          el('button', { class: 'a-btn a-btn--accent', onclick: () => (location.hash = '#/new') }, '✍ new post'),
+          el('button', { class: 'a-btn a-btn--primary', onclick: () => (location.hash = '#/new') }, '✍ new post'),
         ),
   );
 
-  refreshDeploy();
+  refreshDeployCard();
 }
 
-async function refreshDeploy() {
-  const box = $('#a-deploy');
+async function refreshDeployCard() {
+  const box = $('#a-deploy-mini');
   if (!box || !state.gh) return;
   box.replaceChildren(el('p', { class: 'a-note' }, 'checking…'));
   try {
@@ -428,16 +465,20 @@ async function refreshDeploy() {
     }
     const done = run.status === 'completed';
     const ok = done && run.conclusion === 'success';
-    const icon = done ? (ok ? '✓' : '✗') : '…';
-    const cls = done ? (ok ? 'a-status--ok' : 'a-status--bad') : 'a-status--run';
-    const line = done ? run.conclusion : run.status;
+    const cls = done ? (ok ? 'a-badge--ok' : 'a-badge--bad') : 'a-badge--run';
+    const label = done ? run.conclusion : run.status;
     box.replaceChildren(
-      el('div', { class: 'a-status-row' },
-        el('span', { class: `a-status ${cls}` }, icon),
+      el('div', { class: 'a-run-status' },
+        el('span', { class: `dot dot--${done ? (ok ? 'ok' : 'bad') : 'run'}` }),
         el('div', {},
-          el('div', {}, el('strong', {}, line), done ? '' : ' — building & deploying'),
-          el('div', { class: 'a-note' }, `${relTime(run.created_at)} · `,
-            el('a', { class: 'a-out', href: run.html_url, target: '_blank', rel: 'noopener' }, 'view run ↗')),
+          el('div', {},
+            el('span', { class: `a-badge ${cls}` }, label),
+            done ? '' : ' building & deploying…',
+          ),
+          el('div', { class: 'a-note' },
+            `${relTime(run.created_at)} · `,
+            el('a', { class: 'a-out', href: run.html_url, target: '_blank', rel: 'noopener' }, 'view run ↗'),
+          ),
         ),
       ),
     );
@@ -446,15 +487,26 @@ async function refreshDeploy() {
   }
 }
 
+// ── shared page header ───────────────────────
+function pageHead(title, sub, actions = []) {
+  return el('div', { class: 'a-topbar' },
+    el('div', {},
+      el('h1', {}, title),
+      sub ? el('p', { class: 'a-topbar__sub' }, sub) : null,
+    ),
+    actions.length ? el('div', { class: 'a-topbar__right' }, ...actions) : null,
+  );
+}
+
 // ── posts list ───────────────────────────────
 function renderPosts(viewEl) {
   const chipWrap = el('div', { class: 'a-chip-row' });
   const listWrap = el('div');
 
-  // re-renders ONLY the list, so the search input keeps focus while typing
   function renderPostList() {
     let posts = state.posts;
-    if (ui.postsFilter === 'published') posts = posts.filter((p) => !p.data.draft);
+    if (ui.postsFilter === 'published') posts = posts.filter((p) => !p.data.draft && !isFutureDate(p.data.pubDate));
+    if (ui.postsFilter === 'scheduled') posts = posts.filter((p) => !p.data.draft && isFutureDate(p.data.pubDate));
     if (ui.postsFilter === 'drafts') posts = posts.filter((p) => p.data.draft);
     const q = ui.postsQuery.trim().toLowerCase();
     if (q) {
@@ -464,37 +516,36 @@ function renderPosts(viewEl) {
           (p.data.tags || []).some((t) => t.toLowerCase().includes(q)),
       );
     }
-
     const rows = posts.map((p) =>
       el('div', { class: 'a-row' },
         el('div', { class: 'a-row__main' },
           el('a', { class: 'a-row__title', href: `#/edit/${encodeURIComponent(p.id)}` }, p.data.title || p.id),
           (p.data.tags || []).slice(0, 3).map((t) => el('span', { class: 'a-tag' }, `#${t}`)),
           p.data.draft ? el('span', { class: 'a-badge a-badge--draft' }, 'draft') : null,
+          isFutureDate(p.data.pubDate) ? el('span', { class: 'a-badge a-badge--run' }, 'scheduled') : null,
         ),
         el('div', { class: 'a-row__date' }, pretty(p.data.pubDate)),
         el('div', { class: 'a-row__actions' },
           el('button', { class: 'a-mini', title: 'duplicate', onclick: () => duplicatePost(p) }, '⧉'),
           el('button', {
             class: 'a-mini',
-            title: p.data.draft ? 'publish' : 'move to drafts',
+            title: p.data.draft ? 'publish now' : 'move to drafts',
             onclick: () => toggleDraft(p),
           }, p.data.draft ? '🚀' : '🙈'),
           el('button', { class: 'a-mini a-mini--danger', title: 'delete', onclick: () => deletePost(p) }, '✕'),
         ),
       ),
     );
-
     listWrap.replaceChildren(
       posts.length === 0
-        ? el('div', { class: 'a-card' },
-            el('p', { class: 'a-note' }, q ? 'nothing matches your search.' : 'nothing here yet — write something.'),
+        ? el('div', { class: 'a-empty' },
+            el('div', { class: 'big' }, '✍'),
+            q ? 'nothing matches your search.' : 'nothing here yet — write something.',
           )
         : el('div', { class: 'a-list' }, ...rows),
     );
   }
 
-  // re-renders just the filter chips (keeps their active state honest)
   function renderChips() {
     const chip = (label, value) =>
       el('button', {
@@ -505,15 +556,19 @@ function renderPosts(viewEl) {
           renderPostList();
         },
       }, label);
-    chipWrap.replaceChildren(chip('all', 'all'), chip('published', 'published'), chip('drafts', 'drafts'));
+    chipWrap.replaceChildren(
+      chip('all', 'all'),
+      chip('published', 'published'),
+      chip('scheduled', 'scheduled'),
+      chip('drafts', 'drafts'),
+    );
   }
 
   viewEl.replaceChildren(
-    el('div', { class: 'a-pagehead' },
-      el('h2', { class: 'a-h2' }, 'posts'),
-      el('span', { class: 'a-count' }, `${state.posts.length} total`),
-      el('button', { class: 'a-btn a-btn--accent a-pagehead__new', onclick: () => (location.hash = '#/new') }, '✍ new post'),
-    ),
+    pageHead('posts', `${state.posts.length} total`, [
+      el('button', { class: 'a-btn', onclick: () => (location.hash = '#/tools') }, '🧰 import / export'),
+      el('button', { class: 'a-btn a-btn--primary', onclick: () => (location.hash = '#/new') }, '✍ new post'),
+    ]),
 
     el('div', { class: 'a-toolbar-row' },
       el('input', {
@@ -538,11 +593,7 @@ function renderPosts(viewEl) {
 
 // ── posts: actions ───────────────────────────
 function duplicatePost(p) {
-  state.clone = {
-    data: { ...p.data, title: p.data.title, draft: true },
-    body: p.body,
-    slug: `${slugify(p.id)}-copy`,
-  };
+  state.clone = { data: { ...p.data, draft: true }, body: p.body, slug: `${slugify(p.id)}-copy` };
   location.hash = '#/new';
 }
 
@@ -570,6 +621,7 @@ async function deletePost(p, redirectHash) {
   try {
     await state.gh.commitFiles([{ path: p.path, delete: true }], `remove post · ${p.id}`);
     state.posts = state.posts.filter((x) => x.id !== p.id);
+    state.tree = null;
     toast('post deleted', 'success');
     location.hash = redirectHash || '#/posts';
   } catch (e) {
@@ -581,6 +633,7 @@ async function deletePost(p, redirectHash) {
 
 // ── post editor ──────────────────────────────
 function renderEditor(viewEl, id) {
+  disposeEditors();
   const existing = id ? state.posts.find((p) => p.id === id) : null;
   if (id && !existing) {
     toast('post not found', 'error');
@@ -588,12 +641,9 @@ function renderEditor(viewEl, id) {
     return;
   }
   const src = existing || state.clone || { data: {} };
-  if (!existing) state.clone = null; // the clone is consumed by this editor
+  state.clone = null; // one-shot: never leak a duplicate into a later "new"
   state.dirty = false;
-  ui.mode = 'write';
   ui.newSlugTouched = false;
-  const wasFs = !!fsCard;
-  if (wasFs) exitFullscreen();
 
   const titleInput = el('input', {
     class: 'a-title', id: 'f-title', placeholder: 'a good title…',
@@ -607,7 +657,7 @@ function renderEditor(viewEl, id) {
     },
   });
 
-  const pubDate = el('input', { class: 'a-input', type: 'date', id: 'f-pubdate', value: src.data.pubDate || '' });
+  const pubDate = el('input', { class: 'a-input', type: 'date', id: 'f-pubdate', value: src.data.pubDate || todayStr() });
   const updatedDate = el('input', { class: 'a-input', type: 'date', id: 'f-updated', value: src.data.updatedDate || '' });
   const slugInput = el('input', {
     class: 'a-input a-mono', id: 'f-slug', placeholder: 'auto from title',
@@ -629,46 +679,28 @@ function renderEditor(viewEl, id) {
     value: (src.data.tags || []).join(', '),
     oninput: markDirty,
   });
-  const bodyTextarea = el('textarea', {
-    class: 'a-body-input', id: 'f-body', placeholder: 'write in markdown…',
-    spellcheck: 'true',
-    oninput: () => {
+
+  const editorHost = el('div', { class: 'a-editor-host' });
+  const editor = createEditor({
+    container: editorHost,
+    value: src.body,
+    onChange: () => {
       markDirty();
       updateStats();
-      schedulePreview();
     },
-  }, src.body || '');
+    onImage: stageEditorImage,
+  });
 
-  function updateStats() {
-    const w = countWords(bodyTextarea.value);
-    const mins = Math.max(1, Math.ceil(w / 220));
-    const s = $('#f-stats');
-    if (s) s.textContent = `${w} words · ${bodyTextarea.value.length} chars · ${mins} min read`;
-  }
-
-  const pathHint = el('p', { class: 'a-path' }, 'src/content/blog/', el('span', { id: 'f-path-slug', class: 'a-mono' }, ''), '.md');
-  function updatePathHint() {
-    const s = $('#f-path-slug');
-    if (s) s.textContent = slugify($('#f-slug').value || slugify(titleInput.value) || 'post');
-  }
-
-  const stats = el('span', { id: 'f-stats', class: 'a-mono' }, `${countWords(bodyTextarea.value)} words`);
-  const dirtyDot = el('span', { class: 'a-dirtydot', hidden: true }, 'unsaved');
-
-  // ── images staged with this post (committed together on save) ──
+  // ── staged images ──
   const pendingImages = [];
   const chipsEl = el('div', { class: 'a-imgchips', hidden: true });
-  const rtoolbarEl = el('div', { class: 'a-rtoolbar' });
 
   function renderChips() {
     chipsEl.replaceChildren(...pendingImages.map((img) =>
       el('span', { class: 'a-imgchip', title: img.path },
         el('span', { class: 'a-imgchip__name' }, img.name),
-        el('span', { class: 'a-imgchip__meta' }, `${Math.max(1, Math.round(img.size / 1024))} KB`),
-        el('button', {
-          class: 'a-mini a-mini--danger', type: 'button',
-          title: 'remove from this post', onclick: () => removeImage(img),
-        }, '✕'),
+        el('span', { class: 'a-imgchip__meta' }, fmtSize(img.size)),
+        el('button', { class: 'a-mini a-mini--danger', type: 'button', title: 'remove', onclick: () => removeImage(img) }, '✕'),
       ),
     ));
     chipsEl.hidden = pendingImages.length === 0;
@@ -678,97 +710,72 @@ function renderEditor(viewEl, id) {
     const idx = pendingImages.indexOf(img);
     if (idx === -1) return;
     pendingImages.splice(idx, 1);
-    // prefer the recorded insertion point (handles the same image twice),
-    // falling back to a search if the text moved around
-    let at =
-      img.at != null && bodyTextarea.value.slice(img.at, img.at + img.md.length) === img.md
-        ? img.at
-        : bodyTextarea.value.indexOf(img.md);
+    // remove the *last* occurrence — matches the most recently inserted copy
+    const md = editor.getMarkdown();
+    const at = md.lastIndexOf(img.md);
     if (at !== -1) {
-      bodyTextarea.value = bodyTextarea.value.slice(0, at) + bodyTextarea.value.slice(at + img.md.length);
+      editor.setMarkdown(md.slice(0, at) + md.slice(at + img.md.length), false);
     }
     renderChips();
     updateStats();
-    if (ui.mode !== 'write') renderPreview();
     markDirty();
   }
 
-  async function stageFiles(files) {
+  async function stageEditorImage(file) {
     if (actionBusy) {
       toast('wait for the current save to finish first', 'info');
-      return;
+      return null;
     }
-    const imgs = [...files].filter((f) => f.type.startsWith('image/'));
-    if (imgs.length === 0) return;
-    for (const f of imgs) {
-      if (f.size > MAX_IMAGE_BYTES) {
-        toast(`${f.name} is over 8 MB — skipped`, 'error');
-        continue;
-      }
-      try {
-        const b64 = await fileToBase64(f);
-        const ext = (f.name.split('.').pop() || 'png').toLowerCase();
-        const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        const filename = `${stamp}-${Date.now().toString(36)}-${baseName(f.name)}.${ext}`;
-        const path = `public/images/${filename}`;
-        const md = `![${baseName(f.name)}](${BASE}images/${filename})`;
-        const img = { path, content: b64, encoding: 'base64', name: f.name, size: f.size, md };
-        insertText(bodyTextarea, md);
-        img.at = Math.max(0, bodyTextarea.selectionStart - md.length);
-        pendingImages.push(img);
-      } catch (err) {
-        toast(err.message || `could not read ${f.name}`, 'error');
-      }
+    if (file.size > MAX_IMAGE_BYTES) {
+      toast(`${file.name} is over 8 MB — skipped`, 'error');
+      return null;
     }
+    const b64 = await fileToBase64(file);
+    const { filename, path } = imagePathFor(file);
+    const url = `${BASE}images/${filename}`;
+    const alt = baseName(file.name);
+    pendingImages.push({ path, content: b64, encoding: 'base64', name: file.name, size: file.size, md: `![${alt}](${url})` });
     renderChips();
-    updateStats();
-    if (ui.mode !== 'write') renderPreview();
     markDirty();
+    return { url, alt };
   }
 
-  const preview = el('div', { class: 'a-preview prose', hidden: true });
-
-  function schedulePreview() {
-    clearTimeout(schedulePreview._t);
-    schedulePreview._t = setTimeout(renderPreview, 200);
-  }
-  function renderPreview() {
-    const t = el('div', { class: 'a-preview__meta' },
-      el('strong', {}, titleInput.value || 'untitled'),
-      el('span', {}, `${pretty(pubDate.value)}${updatedDate.value ? ` · updated ${pretty(updatedDate.value)}` : ''}`),
-      tagsInput.value.split(',').map((s) => s.trim()).filter(Boolean)
-        .map((t) => el('span', { class: 'a-tag' }, `#${t}`)),
-      draftBox.checked ? el('span', { class: 'a-badge a-badge--draft' }, 'draft') : null,
-    );
-    preview.replaceChildren(t, el('div', { class: 'a-preview__body', html: renderMd(bodyTextarea.value) }));
+  // ── stats + schedule ──
+  const stats = el('span', { class: 'a-mono' }, '');
+  function updateStats() {
+    const md = editor.getMarkdown();
+    const w = countWords(md);
+    const mins = Math.max(1, Math.ceil(w / 220));
+    stats.textContent = `${w} words · ${md.length} chars · ${mins} min read`;
   }
 
-  function applyMode() {
-    bodyTextarea.hidden = ui.mode === 'preview';
-    preview.hidden = ui.mode === 'write';
-    const grid = $('.a-body');
-    grid.classList.toggle('a-body--split', ui.mode === 'split');
-    if (ui.mode !== 'write') renderPreview();
-    if (ui.mode === 'write') bodyTextarea.focus();
+  const scheduleNote = el('div', { class: 'a-schedule-note', hidden: true });
+  function updateSchedule() {
+    const d = pubDate.value;
+    scheduleNote.hidden = !isFutureDate(d);
+    if (!scheduleNote.hidden) {
+      scheduleNote.textContent = `🗓 scheduled for ${pretty(d)} — hidden until then, then published automatically by the daily rebuild.`;
+    }
+  }
+  pubDate.addEventListener('change', () => {
+    markDirty();
+    updateSchedule();
+  });
+
+  const pathHint = el('p', { class: 'a-hint' }, 'src/content/blog/', el('span', { id: 'f-path-slug', class: 'a-mono' }, ''), '.md');
+  function updatePathHint() {
+    const s = $('#f-path-slug');
+    if (s) s.textContent = slugify($('#f-slug').value || slugify(titleInput.value) || 'post');
   }
 
-  const modeBtn = (label, m) =>
-    el('button', {
-      class: `a-mini a-mini--mode${ui.mode === m ? ' a-mini--active' : ''}`,
-      onclick: () => {
-        ui.mode = m;
-        [...viewEl.querySelectorAll('.a-mini--mode')].forEach((b) => b.classList.toggle('a-mini--active', b.textContent === label));
-        applyMode();
-      },
-    }, label);
-
+  const dirtyDot = el('span', { class: 'a-dirtydot', hidden: true }, 'unsaved');
   function markDirty() {
     if (state.dirty) return;
     state.dirty = true;
     dirtyDot.hidden = false;
   }
 
-  const saveBtn = el('button', { class: 'a-btn a-btn--accent', onclick: save }, 'save & publish');
+  const saveBtn = el('button', { class: 'a-btn a-btn--primary', onclick: save }, 'save & publish');
 
   async function save() {
     if (actionBusy) return;
@@ -780,25 +787,36 @@ function renderEditor(viewEl, id) {
       return;
     }
     slug = slugify(slug);
-    if (!existing && state.posts.some((p) => p.id === slug)) {
-      if (!window.confirm(`"${slug}" already exists — overwrite that post?`)) return;
+    // guard BOTH new posts and renames: another post owning this slug would
+    // be silently overwritten when the renamed file is written over it
+    const collision = state.posts.find((p) => p.id === slug && (!existing || p.id !== existing.id));
+    if (collision) {
+      if (!window.confirm(`"${slug}" already exists (${collision.data.title || collision.id}) — overwrite it?`)) return;
     }
-    const date = pubDate.value || new Date().toISOString().slice(0, 10);
+    const date = pubDate.value || todayStr();
     const tags = tagsInput.value.split(',').map((s) => s.trim()).filter(Boolean);
+    // future-dated posts are NOT force-drafted: the site hides them at build
+    // time until their date, and the daily rebuild publishes them then
+    const draft = draftBox.checked;
+    const scheduled = !draft && isFutureDate(date);
+
     const content = buildPostMarkdown({
       title,
       description: descInput.value.trim(),
       pubDate: date,
       updatedDate: updatedDate.value || undefined,
       tags,
-      draft: draftBox.checked,
-      body: bodyTextarea.value,
+      draft,
+      body: editor.getMarkdown(),
     });
     const newPath = `src/content/blog/${slug}.md`;
+    // snapshot BEFORE the await — images staged while the commit is in flight
+    // must not be dropped (and won't be part of this commit either)
+    const staged = pendingImages.slice();
     const files = [];
     if (existing && existing.path !== newPath) files.push({ path: existing.path, delete: true });
     files.push({ path: newPath, content });
-    for (const img of pendingImages) files.push({ path: img.path, content: img.content, encoding: 'base64' });
+    for (const img of staged) files.push({ path: img.path, content: img.content, encoding: 'base64' });
 
     actionBusy = true;
     saveBtn.disabled = true;
@@ -813,9 +831,19 @@ function renderEditor(viewEl, id) {
       state.posts.sort((a, b) => String(b.data.pubDate || '').localeCompare(String(a.data.pubDate || '')));
       state.dirty = false;
       dirtyDot.hidden = true;
-      pendingImages.length = 0;
+      // drop only the images this commit actually uploaded
+      for (const img of staged) {
+        const i = pendingImages.indexOf(img);
+        if (i !== -1) pendingImages.splice(i, 1);
+      }
       renderChips();
-      toast(existing ? 'post updated — deploy running' : 'post published — deploy running', 'success');
+      state.tree = null;
+      toast(
+        existing
+          ? (scheduled ? 'post saved — scheduled for the publish date' : 'post updated — deploy running')
+          : (scheduled ? 'post scheduled — hidden until the publish date' : 'post published — deploy running'),
+        'success',
+      );
       if (!existing) {
         location.hash = `#/edit/${encodeURIComponent(slug)}`;
       } else {
@@ -830,25 +858,23 @@ function renderEditor(viewEl, id) {
     }
   }
 
-  async function copyMd() {
-    try {
-      await navigator.clipboard.writeText(fullMarkdown());
-      toast('markdown copied to clipboard', 'info');
-    } catch {
-      toast('could not copy', 'error');
-    }
-  }
   function fullMarkdown() {
     return buildPostMarkdown({
       title: titleInput.value.trim(),
       description: descInput.value.trim(),
-      pubDate: pubDate.value,
+      pubDate: pubDate.value || todayStr(),
       updatedDate: updatedDate.value || undefined,
       tags: tagsInput.value.split(',').map((s) => s.trim()).filter(Boolean),
       draft: draftBox.checked,
-      body: bodyTextarea.value,
+      body: editor.getMarkdown(),
     });
   }
+
+  async function copyMd() {
+    if (await copyText(fullMarkdown())) toast('markdown copied', 'info');
+    else toast('could not copy', 'error');
+  }
+
   function downloadMd() {
     const blob = new Blob([fullMarkdown()], { type: 'text/markdown' });
     const a = document.createElement('a');
@@ -858,65 +884,619 @@ function renderEditor(viewEl, id) {
     URL.revokeObjectURL(a.href);
   }
 
-  const editorCard = el('div', { class: 'a-editor' },
-    el('div', { class: 'a-editor__head' },
-      el('a', { class: 'a-back', href: '#/posts' }, '← all posts'),
-      el('div', { class: 'a-editor__head-actions' },
-        existing
-          ? el('button', { class: 'a-btn a-btn--ghost-danger', onclick: () => deletePost(existing) }, 'delete')
-          : null,
-        saveBtn,
+  viewEl.replaceChildren(
+    el('div', {},
+      el('div', { class: 'a-editor__head' },
+        el('a', { class: 'a-back', href: '#/posts' }, '← all posts'),
+        el('div', { class: 'a-btn-row' },
+          existing
+            ? el('button', { class: 'a-btn a-btn--danger a-btn--sm', onclick: () => deletePost(existing) }, 'delete')
+            : null,
+          saveBtn,
+        ),
       ),
-    ),
 
-    titleInput,
+      titleInput,
 
-    el('div', { class: 'a-meta-grid' },
-      el('label', { class: 'a-field' }, 'published', pubDate),
-      el('label', { class: 'a-field' }, 'updated', updatedDate),
-      el('label', { class: 'a-field' }, 'slug', slugInput),
-      el('label', { class: 'a-field a-field--check' }, draftBox, 'draft (hidden from listings)'),
-    ),
-
-    el('label', { class: 'a-field' }, 'description', descInput),
-    el('label', { class: 'a-field' }, 'tags', tagsInput),
-
-    rtoolbarEl,
-    chipsEl,
-
-    el('div', { class: 'a-toolbar' },
-      el('div', { class: 'a-mode-row' }, modeBtn('write', 'write'), modeBtn('preview', 'preview'), modeBtn('split', 'split')),
-      el('div', { class: 'a-toolbar__right' },
-        stats,
-        el('button', { class: 'a-mini', onclick: copyMd }, 'copy md'),
-        el('button', { class: 'a-mini', onclick: downloadMd }, 'download'),
+      el('div', { class: 'a-meta-grid' },
+        el('label', { class: 'a-label' }, 'published', pubDate),
+        el('label', { class: 'a-label' }, 'updated', updatedDate),
+        el('label', { class: 'a-label' }, 'slug', slugInput),
+        el('label', { class: 'a-label a-check', style: 'justify-content:flex-end;' }, draftBox, 'draft (hidden)'),
       ),
-    ),
 
-    el('div', { class: 'a-body' }, bodyTextarea, preview),
+      el('div', { class: 'a-meta-grid' },
+        el('label', { class: 'a-label' }, 'description', descInput),
+        el('label', { class: 'a-label' }, 'tags', tagsInput),
+      ),
 
-    el('div', { class: 'a-editor__foot' },
-      pathHint,
-      el('span', { class: 'a-foot-hint' }, 'drag & drop images · paste screenshots'),
-      dirtyDot,
+      scheduleNote,
+
+      el('div', { class: 'a-toolbar' },
+        el('div', {}, stats, dirtyDot),
+        el('div', { class: 'a-toolbar__right' },
+          el('button', { class: 'a-mini', onclick: copyMd }, 'copy md'),
+          el('button', { class: 'a-mini', onclick: downloadMd }, 'download'),
+        ),
+      ),
+
+      chipsEl,
+      editorHost,
+
+      el('div', { class: 'a-editor__foot' },
+        pathHint,
+        el('span', {}, 'images: upload button, drag & drop, or paste'),
+      ),
     ),
   );
 
-  viewEl.replaceChildren(editorCard);
+  updateSchedule();
+  updatePathHint();
+  updateStats();
+}
 
-  setupRichEditor({
-    textarea: bodyTextarea,
-    toolbarEl: rtoolbarEl,
-    onFiles: stageFiles,
-    onSave: save,
-    onFullscreen: () => toggleFullscreen(editorCard),
+// ── media library ────────────────────────────
+async function loadTree() {
+  if (!state.tree) state.tree = await state.gh.listTree();
+  return state.tree;
+}
+
+async function renderMedia(viewEl) {
+  setBusy(true);
+  try {
+    const tree = await loadTree();
+    const items = tree.filter((f) => f.path.startsWith('public/images/'));
+    const total = items.reduce((n, f) => n + (f.size || 0), 0);
+
+    const fileInput = el('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true });
+    fileInput.addEventListener('change', () => {
+      const files = [...(fileInput.files || [])];
+      fileInput.value = '';
+      if (files.length) uploadMedia(files, viewEl);
+    });
+
+    const grid = el('div', { class: 'a-media' }, ...items.map((f) => {
+      const url = `${BASE}${f.path.replace('public/', '')}`;
+      const md = `![${baseName(f.path.split('/').pop())}](${url})`;
+      return el('div', { class: 'a-media-item' },
+        el('div', { class: 'a-media-item__thumb' },
+          el('img', { src: url, alt: '', loading: 'lazy' }),
+        ),
+        el('div', { class: 'a-media-item__body' },
+          el('div', { class: 'a-media-item__name', title: f.path }, f.path.replace('public/', '')),
+          el('div', { class: 'a-media-item__meta' }, fmtSize(f.size || 0)),
+          el('div', { class: 'a-btn-row' },
+            el('button', { class: 'a-mini', title: 'copy markdown', onclick: async () => {
+              if (await copyText(md)) toast('markdown copied', 'info');
+            } }, 'copy md'),
+            el('button', { class: 'a-mini', title: 'copy URL', onclick: async () => {
+              if (await copyText(url)) toast('URL copied', 'info');
+            } }, 'url'),
+            el('button', { class: 'a-mini a-mini--danger', title: 'delete', onclick: () => deleteMedia(f, viewEl) }, '✕'),
+          ),
+        ),
+      );
+    }));
+
+    viewEl.replaceChildren(
+      pageHead('media', `${items.length} images · ${fmtSize(total)}`, [
+        el('button', { class: 'a-btn', onclick: () => renderMedia(viewEl) }, '↻ refresh'),
+        el('button', { class: 'a-btn a-btn--primary', onclick: () => fileInput.click() }, '⬆ upload'),
+        fileInput,
+      ]),
+      items.length === 0
+        ? el('div', { class: 'a-card' },
+            el('div', { class: 'a-card__head' }, el('h2', {}, 'no images yet')),
+            el('p', { class: 'a-note' }, 'Images you add to posts (or upload here) land in public/images and appear here.'),
+            el('button', { class: 'a-btn a-btn--primary', onclick: () => fileInput.click() }, '⬆ upload images'),
+            fileInput,
+          )
+        : grid,
+    );
+  } catch (e) {
+    toast(e.message || 'could not load media', 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function uploadMedia(files, viewEl) {
+  if (actionBusy) return;
+  const imgs = [...files].filter((f) => f.type.startsWith('image/'));
+  if (imgs.length === 0) return;
+  actionBusy = true;
+  setBusy(true);
+  try {
+    const toCommit = [];
+    for (const f of imgs) {
+      if (f.size > MAX_IMAGE_BYTES) {
+        toast(`${f.name} is over 8 MB — skipped`, 'error');
+        continue;
+      }
+      const b64 = await fileToBase64(f);
+      const { path } = imagePathFor(f);
+      toCommit.push({ path, content: b64, encoding: 'base64' });
+    }
+    if (toCommit.length) {
+      await state.gh.commitFiles(toCommit, `🖼 upload ${toCommit.length} image${toCommit.length > 1 ? 's' : ''}`);
+      state.tree = null;
+      toast(`${toCommit.length} image${toCommit.length > 1 ? 's' : ''} uploaded — deploy running`, 'success');
+    }
+    renderMedia(viewEl);
+  } catch (e) {
+    toast(e.message || 'upload failed', 'error');
+  } finally {
+    actionBusy = false;
+    setBusy(false);
+  }
+}
+
+async function deleteMedia(item, viewEl) {
+  if (actionBusy) return;
+  if (!window.confirm(`Delete ${item.path}?`)) return;
+  actionBusy = true;
+  setBusy(true);
+  try {
+    await state.gh.commitFiles([{ path: item.path, delete: true }], `🗑 delete image · ${item.path}`);
+    state.tree = null;
+    toast('image deleted', 'success');
+    renderMedia(viewEl);
+  } catch (e) {
+    toast(e.message || 'delete failed', 'error');
+  } finally {
+    actionBusy = false;
+    setBusy(false);
+  }
+}
+
+// ── pages & files manager ────────────────────
+const TEXT_EXT = /\.(md|mdx|astro|ts|mjs|js|css|json|xml|svg|txt)$/;
+
+async function renderFiles(viewEl) {
+  setBusy(true);
+  try {
+    const tree = await loadTree();
+    const files = tree
+      .filter((f) => TEXT_EXT.test(f.path) && !f.path.includes('node_modules') && !f.path.startsWith('public/images/'))
+      .sort((a, b) => a.path.localeCompare(b.path));
+
+    const quick = [
+      'src/pages/about.astro',
+      'src/pages/404.astro',
+      'src/components/Footer.astro',
+      'src/components/Header.astro',
+      'src/styles/global.css',
+      'src/pages/now.astro',
+      'src/content.config.ts',
+      'astro.config.mjs',
+    ];
+    const quickLinks = quick.map((p) =>
+      el('a', { class: 'a-chip', href: `#/file/${encodeURIComponent(p)}` }, p.split('/').pop()),
+    );
+
+    const groups = new Map();
+    for (const f of files) {
+      const dir = f.path.includes('/') ? f.path.split('/').slice(0, 2).join('/') : 'root';
+      if (!groups.has(dir)) groups.set(dir, []);
+      groups.get(dir).push(f);
+    }
+    const groupEls = [...groups.entries()].map(([dir, list]) =>
+      el('div', { class: 'a-tree-group' },
+        el('div', { class: 'a-tree-group__title' }, dir),
+        el('div', { class: 'a-tree' }, ...list.map((f) =>
+          el('div', { class: 'a-tree-row' },
+            el('span', { class: 'a-tree-row__path', title: f.path }, f.path),
+            el('div', { class: 'a-row__actions' },
+              el('span', { class: 'a-mono', style: 'font-size:.7rem;color:var(--a-faint);' }, fmtSize(f.size || 0)),
+              el('a', { class: 'a-mini', href: `#/file/${encodeURIComponent(f.path)}` }, 'edit'),
+            ),
+          ),
+        )),
+      ),
+    );
+
+    viewEl.replaceChildren(
+      pageHead('pages & files', 'every text file in the repo, editable', []),
+      el('div', { class: 'a-card' },
+        el('div', { class: 'a-card__head' }, el('h2', {}, 'quick edits')),
+        el('div', { class: 'a-btn-row' }, ...quickLinks),
+      ),
+      ...groupEls,
+    );
+  } catch (e) {
+    toast(e.message || 'could not load files', 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function renderFile(viewEl, path) {
+  setBusy(true);
+  let file;
+  try {
+    file = await state.gh.getTextFile(path);
+  } catch (e) {
+    toast(e.message || 'could not read file', 'error');
+    location.hash = '#/files';
+    return;
+  } finally {
+    setBusy(false);
+  }
+
+  state.dirty = false;
+  const ta = el('textarea', { class: 'a-code', spellcheck: 'false' }, file.content);
+  ta.addEventListener('input', () => {
+    state.dirty = true;
+    dirtyDot.hidden = false;
+  });
+  const dirtyDot = el('span', { class: 'a-dirtydot', hidden: true }, 'unsaved');
+  const saveBtn = el('button', { class: 'a-btn a-btn--primary', onclick: saveFile }, 'save file');
+  const githubLink = `https://github.com/${state.gh.owner}/${state.gh.repo}/blob/${state.gh.branch}/${path}`;
+
+  async function saveFile() {
+    if (actionBusy) return;
+    actionBusy = true;
+    saveBtn.disabled = true;
+    setBusy(true);
+    try {
+      await state.gh.commitFiles([{ path, content: ta.value }], `✏️ edit ${path}`);
+      state.tree = null;
+      state.dirty = false;
+      dirtyDot.hidden = true;
+      toast('file saved — deploy running', 'success');
+    } catch (e) {
+      toast(e.message || 'save failed', 'error');
+    } finally {
+      actionBusy = false;
+      saveBtn.disabled = false;
+      setBusy(false);
+    }
+  }
+
+  const isCode = /\.(ts|mjs|js|astro|css)$/.test(path);
+  viewEl.replaceChildren(
+    pageHead('edit file',
+      el('span', { class: 'a-mono' }, path),
+      [
+        el('a', { class: 'a-out', href: githubLink, target: '_blank', rel: 'noopener' }, 'view on github ↗'),
+        el('button', { class: 'a-btn', onclick: () => (location.hash = '#/files') }, '← all files'),
+        saveBtn,
+        dirtyDot,
+      ],
+    ),
+    el('div', {},
+      isCode
+        ? el('p', { class: 'a-note' }, 'This is site code — be careful. A syntax error will break the build until fixed.')
+        : null,
+      ta,
+    ),
+  );
+}
+
+// ── tags ─────────────────────────────────────
+function tagCounts() {
+  const counts = {};
+  for (const p of state.posts) {
+    for (const t of p.data.tags || []) counts[t] = (counts[t] || 0) + 1;
+  }
+  return counts;
+}
+
+function renderTags(viewEl) {
+  const counts = tagCounts();
+  const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+
+  const rows = names.map((tag) =>
+    el('div', { class: 'a-row' },
+      el('div', { class: 'a-row__main' },
+        el('span', { class: 'a-tag' }, `#${tag}`),
+        el('span', { class: 'a-count' }, `${counts[tag]} post${counts[tag] > 1 ? 's' : ''}`),
+      ),
+      el('div', { class: 'a-row__actions' },
+        el('button', { class: 'a-mini', title: 'show posts with this tag', onclick: () => {
+          ui.postsFilter = 'all';
+          ui.postsQuery = tag;
+          location.hash = '#/posts';
+        } }, 'filter'),
+        el('button', { class: 'a-mini', title: 'rename across all posts', onclick: () => renameTag(tag) }, 'rename'),
+        el('button', { class: 'a-mini a-mini--danger', title: 'remove from all posts', onclick: () => removeTag(tag) }, '✕'),
+      ),
+    ),
+  );
+
+  viewEl.replaceChildren(
+    pageHead('tags', `${names.length} tags across ${state.posts.length} posts`, [
+      el('button', { class: 'a-btn', onclick: () => renderTags(viewEl) }, '↻ refresh'),
+    ]),
+    names.length === 0
+      ? el('div', { class: 'a-card' },
+          el('div', { class: 'a-card__head' }, el('h2', {}, 'no tags yet')),
+          el('p', { class: 'a-note' }, 'Add comma-separated tags to a post and they will show up here.'),
+        )
+      : el('div', { class: 'a-list' }, ...rows),
+  );
+}
+
+async function renameTag(oldTag) {
+  const fresh = window.prompt('New tag name', oldTag);
+  if (!fresh || fresh.trim() === oldTag) return;
+  const name = fresh.trim().toLowerCase().replace(/\s+/g, '-');
+  if (!name) return;
+  const changed = state.posts
+    .filter((p) => (p.data.tags || []).includes(oldTag))
+    .map((p) => ({
+      p,
+      content: buildPostMarkdown({ ...p.data, tags: (p.data.tags || []).map((t) => (t === oldTag ? name : t)), body: p.body }),
+    }));
+  if (changed.length === 0) return;
+  actionBusy = true;
+  setBusy(true);
+  try {
+    await state.gh.commitFiles(
+      changed.map(({ p, content }) => ({ path: p.path, content })),
+      `🏷 rename tag #${oldTag} → #${name}`,
+    );
+    for (const { p } of changed) {
+      p.data.tags = (p.data.tags || []).map((t) => (t === oldTag ? name : t));
+    }
+    toast(`renamed #${oldTag} → #${name} (${changed.length} post${changed.length > 1 ? 's' : ''})`, 'success');
+    renderRoute();
+  } catch (e) {
+    toast(e.message || 'rename failed', 'error');
+  } finally {
+    actionBusy = false;
+    setBusy(false);
+  }
+}
+
+async function removeTag(tag) {
+  if (!window.confirm(`Remove #${tag} from all ${tagCounts()[tag]} posts?`)) return;
+  const changed = state.posts
+    .filter((p) => (p.data.tags || []).includes(tag))
+    .map((p) => ({
+      p,
+      content: buildPostMarkdown({ ...p.data, tags: (p.data.tags || []).filter((t) => t !== tag), body: p.body }),
+    }));
+  if (changed.length === 0) return;
+  actionBusy = true;
+  setBusy(true);
+  try {
+    await state.gh.commitFiles(changed.map(({ p, content }) => ({ path: p.path, content })), `🏷 remove tag #${tag}`);
+    for (const { p } of changed) p.data.tags = (p.data.tags || []).filter((t) => t !== tag);
+    toast(`removed #${tag} from ${changed.length} post${changed.length > 1 ? 's' : ''}`, 'success');
+    renderRoute();
+  } catch (e) {
+    toast(e.message || 'update failed', 'error');
+  } finally {
+    actionBusy = false;
+    setBusy(false);
+  }
+}
+
+// ── import / export ──────────────────────────
+function renderTools(viewEl) {
+  const exportBtn = el('button', { class: 'a-btn a-btn--primary', onclick: exportAll }, '⬇ download all posts (.zip)');
+
+  const importInput = el('input', { type: 'file', accept: '.md,.mdx', multiple: true, hidden: true });
+  const importWrap = el('div');
+
+  function renderImportList() {
+    if (ui.importItems.length === 0) {
+      importWrap.replaceChildren(el('p', { class: 'a-note' }, 'Nothing staged yet.'));
+      return;
+    }
+    const rows = ui.importItems.map((it, i) =>
+      el('div', { class: 'a-row' },
+        el('div', { class: 'a-row__main' },
+          el('span', { class: 'a-row__title' }, it.data.title || it.fileName),
+          el('input', {
+            class: 'a-input a-mono', style: 'max-width:14rem;', value: it.slug,
+            oninput: (e) => { it.slug = slugify(e.target.value); },
+          }),
+          el('label', { class: 'a-check' },
+            el('input', { class: 'a-checkbox', type: 'checkbox', checked: !!it.data.draft,
+              onchange: (e) => { it.data.draft = e.target.checked; } }),
+            'draft',
+          ),
+        ),
+        el('div', { class: 'a-row__actions' },
+          el('button', { class: 'a-mini a-mini--danger', title: 'remove', onclick: () => {
+            ui.importItems.splice(i, 1);
+            renderImportList();
+          } }, '✕'),
+        ),
+      ),
+    );
+    importWrap.replaceChildren(
+      el('div', { class: 'a-list' }, ...rows),
+      el('div', { class: 'a-btn-row', style: 'margin-top:.7rem;' },
+        el('button', { class: 'a-btn a-btn--primary', onclick: importAll }, `import ${ui.importItems.length} post${ui.importItems.length > 1 ? 's' : ''}`),
+        el('button', { class: 'a-btn', onclick: () => { ui.importItems = []; renderImportList(); } }, 'clear'),
+      ),
+    );
+  }
+
+  function onImportFiles(files) {
+    const mds = [...files].filter((f) => /\.mdx?$/i.test(f.name));
+    if (mds.length === 0) {
+      toast('drop .md files', 'error');
+      return;
+    }
+    for (const f of mds) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const { data, body } = parseFrontmatter(String(reader.result || ''));
+        const slug = slugify(f.name.replace(/\.mdx?$/i, '')) || slugify(data.title || 'post');
+        const full = { ...data, pubDate: data.pubDate || todayStr(), tags: data.tags || [], draft: data.draft !== undefined ? data.draft : true };
+        ui.importItems.push({ fileName: f.name, slug, data: full, body });
+        renderImportList();
+      };
+      reader.readAsText(f);
+    }
+  }
+
+  async function importAll() {
+    if (ui.importItems.length === 0) return;
+    const dups = ui.importItems.filter((it) => state.posts.some((p) => p.id === it.slug));
+    if (dups.length) {
+      if (!window.confirm(`${dups.length} slug(s) already exist (${dups.map((d) => d.slug).join(', ')}). Overwrite them?`)) return;
+    }
+    actionBusy = true;
+    setBusy(true);
+    try {
+      const files = ui.importItems.map((it) => ({
+        path: `src/content/blog/${it.slug}.md`,
+        content: buildPostMarkdown({ ...it.data, body: it.body }),
+      }));
+      await state.gh.commitFiles(files, `📥 import ${files.length} post${files.length > 1 ? 's' : ''}`);
+      for (const it of ui.importItems) {
+        const { data, body } = parseFrontmatter(buildPostMarkdown({ ...it.data, body: it.body }));
+        const post = { id: it.slug, path: `src/content/blog/${it.slug}.md`, data, body };
+        const idx = state.posts.findIndex((p) => p.id === it.slug);
+        if (idx >= 0) state.posts.splice(idx, 1, post);
+        else state.posts.push(post);
+      }
+      state.posts.sort((a, b) => String(b.data.pubDate || '').localeCompare(String(a.data.pubDate || '')));
+      state.tree = null;
+      ui.importItems = [];
+      renderImportList();
+      toast(`${files.length} post${files.length > 1 ? 's' : ''} imported — deploy running`, 'success');
+      renderRoute();
+    } catch (e) {
+      toast(e.message || 'import failed', 'error');
+    } finally {
+      actionBusy = false;
+      setBusy(false);
+    }
+  }
+
+  function exportAll() {
+    const files = {};
+    for (const p of state.posts) {
+      files[`posts/${p.id}.md`] = strToU8(buildPostMarkdown({ ...p.data, body: p.body }));
+    }
+    if (state.now) files['now.md'] = strToU8(buildNowMarkdown({ ...state.now.data, body: state.now.body }));
+    files['README.txt'] = strToU8(
+      `Backup of ${state.gh.owner}/${state.gh.repo} — ${state.posts.length} posts, exported ${new Date().toISOString().slice(0, 10)}.\nRe-import with the admin's import tool.\n`,
+    );
+    const blob = new Blob([zipSync(files)], { type: 'application/zip' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `my-corner-posts-${new Date().toISOString().slice(0, 10)}.zip`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('backup downloaded', 'success');
+  }
+
+  // drag & drop for imports
+  const dropCard = el('div', { class: 'a-card', style: 'position:relative;' });
+  ['dragenter', 'dragover'].forEach((ev) =>
+    dropCard.addEventListener(ev, (e) => {
+      if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+    }),
+  );
+  dropCard.addEventListener('drop', (e) => {
+    e.preventDefault();
+    onImportFiles([...(e.dataTransfer?.files || [])]);
   });
 
-  if (wasFs) toggleFullscreen(editorCard);
-  updatePathHint();
-  applyMode();
-  updateStats();
-  bodyTextarea.focus();
+  dropCard.replaceChildren(
+    el('div', { class: 'a-card__head' }, el('h2', {}, 'import posts')),
+    el('p', { class: 'a-note' }, 'Drop .md files here, or pick them — each becomes a new post you can review before importing.'),
+    el('div', { class: 'a-btn-row' },
+      el('button', { class: 'a-btn', onclick: () => importInput.click() }, 'choose .md files'),
+      importInput,
+    ),
+    el('div', { style: 'margin-top:.7rem;' }, importWrap),
+  );
+
+  viewEl.replaceChildren(
+    pageHead('import & export', 'backups and bulk imports', []),
+    el('div', { class: 'a-card' },
+      el('div', { class: 'a-card__head' }, el('h2', {}, 'export')),
+      el('p', { class: 'a-note' }, `Back up all ${state.posts.length} posts (plus the now page) as a single .zip of markdown files.`),
+      el('div', { class: 'a-btn-row' }, exportBtn),
+    ),
+    dropCard,
+    renderImportList(),
+  );
+}
+
+// ── deploy ───────────────────────────────────
+async function renderDeploy(viewEl) {
+  const runsWrap = el('div', { id: 'a-runs' });
+
+  async function refresh() {
+    runsWrap.replaceChildren(el('p', { class: 'a-note' }, 'loading…'));
+    try {
+      const runs = await state.gh.listWorkflowRuns(8);
+      if (runs.length === 0) {
+        runsWrap.replaceChildren(el('p', { class: 'a-note' }, 'no workflow runs yet — push or save something first.'));
+        return;
+      }
+      runsWrap.replaceChildren(
+        el('div', { class: 'a-list' }, ...runs.map((r) => {
+          const done = r.status === 'completed';
+          const ok = done && r.conclusion === 'success';
+          const cls = done ? (ok ? 'a-badge--ok' : 'a-badge--bad') : 'a-badge--run';
+          return el('div', { class: 'a-row' },
+            el('div', { class: 'a-row__main' },
+              el('span', { class: `a-badge ${cls}` }, done ? r.conclusion : r.status),
+              el('span', { class: 'a-row__title', style: 'font-weight:500;' }, r.name || 'deploy'),
+            ),
+            el('div', { class: 'a-row__date' },
+              `${relTime(r.created_at)} · ${(r.head_sha || '').slice(0, 7)} · `,
+              el('a', { class: 'a-out', href: r.html_url, target: '_blank', rel: 'noopener' }, 'view ↗'),
+            ),
+          );
+        })),
+      );
+    } catch {
+      runsWrap.replaceChildren(el('p', { class: 'a-note' }, 'could not fetch runs (Actions may be off or the token lacks workflow read).'));
+    }
+  }
+
+  const triggerBtn = el('button', { class: 'a-btn a-btn--primary', onclick: trigger }, '🚀 rebuild & deploy now');
+  async function trigger() {
+    if (actionBusy) return;
+    actionBusy = true;
+    triggerBtn.disabled = true;
+    try {
+      await state.gh.triggerWorkflow();
+      toast('deploy started — watch it below', 'success');
+      setTimeout(refresh, 2500);
+    } catch (e) {
+      toast(
+        /403|scope|permission/i.test(e.message)
+          ? 'Your token cannot trigger workflows — it needs workflow (or Actions: read & write on a fine-grained token) permission.'
+          : e.message || 'trigger failed',
+        'error',
+      );
+    } finally {
+      actionBusy = false;
+      triggerBtn.disabled = false;
+    }
+  }
+
+  viewEl.replaceChildren(
+    pageHead('deploy', 'build & publish status', [
+      el('button', { class: 'a-btn', onclick: refresh }, '↻ refresh'),
+      triggerBtn,
+    ]),
+    el('div', { class: 'a-card' },
+      el('div', { class: 'a-card__head' }, el('h2', {}, 'recent runs')),
+      runsWrap,
+    ),
+    el('div', { class: 'a-card' },
+      el('div', { class: 'a-card__head' }, el('h2', {}, 'how publishing works')),
+      el('p', { class: 'a-note' },
+        'Every save in this admin is a commit to main. GitHub Actions builds the site and deploys it to Pages — usually in about a minute. ',
+        'Future-dated posts stay hidden until their publish date — the daily rebuild workflow publishes them automatically.',
+      ),
+    ),
+  );
+
+  refresh();
 }
 
 // ── settings ─────────────────────────────────
@@ -935,17 +1515,12 @@ function renderSettings(viewEl) {
     dirtyDot.hidden = false;
   }
 
+  const saveBtn = el('button', { class: 'a-btn a-btn--primary', onclick: save }, 'save changes');
   const githubLink = `https://github.com/${state.gh.owner}/${state.gh.repo}/blob/${state.gh.branch}/src/consts.ts`;
-
-  const saveBtn = el('button', { class: 'a-btn a-btn--accent', onclick: save }, 'save changes');
 
   async function save() {
     if (actionBusy) return;
-    const values = {
-      title: title.value.trim(),
-      author: author.value.trim(),
-      description: desc.value.trim(),
-    };
+    const values = { title: title.value.trim(), author: author.value.trim(), description: desc.value.trim() };
     if (!values.title) {
       toast('title cannot be empty', 'error');
       return;
@@ -970,19 +1545,20 @@ function renderSettings(viewEl) {
   }
 
   viewEl.replaceChildren(
+    pageHead('settings', 'the SITE object in src/consts.ts', []),
     el('div', { class: 'a-card' },
       el('div', { class: 'a-card__head' },
-        el('h2', { class: 'a-h2' }, 'site settings'),
+        el('h2', {}, 'site settings'),
         dirtyDot,
       ),
-      el('p', { class: 'a-note' },
-        'These map to the SITE object in src/consts.ts — used in the header, footer, meta tags and the RSS feed.',
+      el('p', { class: 'a-note' }, 'Used in the header, footer, meta tags and the RSS feed.'),
+      el('div', { class: 'a-meta-grid' },
+        el('label', { class: 'a-label' }, 'title', title),
+        el('label', { class: 'a-label' }, 'author', author),
+        el('label', { class: 'a-label' }, 'description', desc),
       ),
-      el('label', { class: 'a-field' }, 'title', title),
-      el('label', { class: 'a-field' }, 'author', author),
-      el('label', { class: 'a-field' }, 'description', desc),
       el('div', { class: 'a-btn-row' }, saveBtn),
-      el('p', { class: 'a-path' }, 'file: ',
+      el('p', { class: 'a-hint' }, 'file: ',
         el('a', { class: 'a-out a-mono', href: githubLink, target: '_blank', rel: 'noopener' }, 'src/consts.ts ↗'),
       ),
     ),
@@ -991,113 +1567,76 @@ function renderSettings(viewEl) {
 
 // ── now page ─────────────────────────────────
 function renderNow(viewEl) {
+  disposeEditors();
   const updatedInput = el('input', {
     class: 'a-input', id: 'n-updated', placeholder: 'e.g. august 2026',
     value: state.now?.data.updated || '',
     oninput: markDirty,
   });
-  const body = el('textarea', {
-    class: 'a-textarea a-body-input', id: 'n-body', rows: 14,
-    placeholder: 'markdown for the now page…',
-    oninput: () => {
-      markDirty();
-      updateStats();
-      schedulePreview();
-    },
-  }, state.now?.body || '');
-
-  function updateStats() {
-    const w = countWords(body.value);
-    const mins = Math.max(1, Math.ceil(w / 220));
-    const s = $('#n-stats');
-    if (s) s.textContent = `${w} words · ${body.value.length} chars · ${mins} min read`;
-  }
-
-  const stats = el('span', { id: 'n-stats', class: 'a-mono' }, `${countWords(body.value)} words`);
-  const preview = el('div', { class: 'a-preview prose', hidden: true });
-  function schedulePreview() {
-    clearTimeout(schedulePreview._t);
-    schedulePreview._t = setTimeout(renderPreview, 200);
-  }
-  function renderPreview() {
-    preview.replaceChildren(el('div', { class: 'a-preview__body', html: renderMd(body.value) }));
-  }
   const dirtyDot = el('span', { class: 'a-dirtydot', hidden: true }, 'unsaved');
   function markDirty() {
     state.dirty = true;
     dirtyDot.hidden = false;
   }
 
-  // ── images staged with the now page ──
+  const editorHost = el('div', { class: 'a-editor-host' });
+  const editor = createEditor({
+    container: editorHost,
+    value: state.now?.body || '',
+    onChange: () => { markDirty(); updateStats(); },
+    onImage: stageEditorImage,
+  });
+
+  const stats = el('span', { class: 'a-mono' }, '');
+  function updateStats() {
+    const md = editor.getMarkdown();
+    const w = countWords(md);
+    stats.textContent = `${w} words · ${Math.max(1, Math.ceil(w / 220))} min read`;
+  }
+
   const pendingImages = [];
   const chipsEl = el('div', { class: 'a-imgchips', hidden: true });
-  const rtoolbarEl = el('div', { class: 'a-rtoolbar' });
-
   function renderChips() {
     chipsEl.replaceChildren(...pendingImages.map((img) =>
       el('span', { class: 'a-imgchip', title: img.path },
         el('span', { class: 'a-imgchip__name' }, img.name),
-        el('span', { class: 'a-imgchip__meta' }, `${Math.max(1, Math.round(img.size / 1024))} KB`),
-        el('button', {
-          class: 'a-mini a-mini--danger', type: 'button',
-          title: 'remove from this page', onclick: () => removeImage(img),
-        }, '✕'),
+        el('span', { class: 'a-imgchip__meta' }, fmtSize(img.size)),
+        el('button', { class: 'a-mini a-mini--danger', type: 'button', onclick: () => removeImage(img) }, '✕'),
       ),
     ));
     chipsEl.hidden = pendingImages.length === 0;
   }
-
   function removeImage(img) {
     const idx = pendingImages.indexOf(img);
     if (idx === -1) return;
     pendingImages.splice(idx, 1);
-    let at =
-      img.at != null && body.value.slice(img.at, img.at + img.md.length) === img.md
-        ? img.at
-        : body.value.indexOf(img.md);
-    if (at !== -1) body.value = body.value.slice(0, at) + body.value.slice(at + img.md.length);
+    const md = editor.getMarkdown();
+    const at = md.lastIndexOf(img.md);
+    if (at !== -1) editor.setMarkdown(md.slice(0, at) + md.slice(at + img.md.length), false);
     renderChips();
-    updateStats();
-    if (!preview.hidden) renderPreview();
     markDirty();
   }
-
-  async function stageFiles(files) {
+  async function stageEditorImage(file) {
     if (actionBusy) {
       toast('wait for the current save to finish first', 'info');
-      return;
+      return null;
     }
-    const imgs = [...files].filter((f) => f.type.startsWith('image/'));
-    if (imgs.length === 0) return;
-    for (const f of imgs) {
-      if (f.size > MAX_IMAGE_BYTES) {
-        toast(`${f.name} is over 8 MB — skipped`, 'error');
-        continue;
-      }
-      try {
-        const b64 = await fileToBase64(f);
-        const ext = (f.name.split('.').pop() || 'png').toLowerCase();
-        const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        const filename = `${stamp}-${Date.now().toString(36)}-${baseName(f.name)}.${ext}`;
-        const path = `public/images/${filename}`;
-        const md = `![${baseName(f.name)}](${BASE}images/${filename})`;
-        const img = { path, content: b64, encoding: 'base64', name: f.name, size: f.size, md };
-        insertText(body, md);
-        img.at = Math.max(0, body.selectionStart - md.length);
-        pendingImages.push(img);
-      } catch (err) {
-        toast(err.message || `could not read ${f.name}`, 'error');
-      }
+    if (file.size > MAX_IMAGE_BYTES) {
+      toast(`${file.name} is over 8 MB — skipped`, 'error');
+      return null;
     }
+    const b64 = await fileToBase64(file);
+    const { filename, path } = imagePathFor(file);
+    const url = `${BASE}images/${filename}`;
+    const alt = baseName(file.name);
+    pendingImages.push({ path, content: b64, encoding: 'base64', name: file.name, size: file.size, md: `![${alt}](${url})` });
     renderChips();
-    updateStats();
-    if (!preview.hidden) renderPreview();
     markDirty();
+    return { url, alt };
   }
 
+  const saveBtn = el('button', { class: 'a-btn a-btn--primary', onclick: save }, 'save changes');
   const githubLink = `https://github.com/${state.gh.owner}/${state.gh.repo}/blob/${state.gh.branch}/src/content/now/now.md`;
-
-  const saveBtn = el('button', { class: 'a-btn a-btn--accent', onclick: save }, 'save changes');
 
   async function save() {
     if (actionBusy) return;
@@ -1105,16 +1644,21 @@ function renderNow(viewEl) {
     saveBtn.disabled = true;
     setBusy(true);
     try {
-      const content = buildNowMarkdown({ updated: updatedInput.value.trim(), body: body.value });
+      const content = buildNowMarkdown({ updated: updatedInput.value.trim(), body: editor.getMarkdown() });
+      const staged = pendingImages.slice(); // snapshot before the await
       const files = [{ path: 'src/content/now/now.md', content }];
-      for (const img of pendingImages) files.push({ path: img.path, content: img.content, encoding: 'base64' });
+      for (const img of staged) files.push({ path: img.path, content: img.content, encoding: 'base64' });
       await state.gh.commitFiles(files, '📌 update now page');
       const { data, body: b } = parseFrontmatter(content);
       state.now = { path: 'src/content/now/now.md', data, body: b };
       state.dirty = false;
       dirtyDot.hidden = true;
-      pendingImages.length = 0;
+      for (const img of staged) {
+        const i = pendingImages.indexOf(img);
+        if (i !== -1) pendingImages.splice(i, 1);
+      }
       renderChips();
+      state.tree = null;
       toast('now page updated — deploy running', 'success');
     } catch (e) {
       toast(e.message || 'save failed', 'error');
@@ -1132,11 +1676,12 @@ function renderNow(viewEl) {
     try {
       const content = buildNowMarkdown({
         updated: 'fresh start',
-        body: 'A running list of what I\'m currently up to.\n\n## building\n\n- something small\n\n## reading\n\n- something good',
+        body: "A running list of what I'm currently up to.\n\n## building\n\n- something small\n\n## reading\n\n- something good",
       });
       await state.gh.commitFiles([{ path: 'src/content/now/now.md', content }], '📌 create now page');
       const { data, body: b } = parseFrontmatter(content);
       state.now = { path: 'src/content/now/now.md', data, body: b };
+      state.tree = null;
       toast('now page created — deploy running', 'success');
       renderRoute();
     } catch (e) {
@@ -1147,73 +1692,74 @@ function renderNow(viewEl) {
     }
   }
 
-  const toggle = el('button', {
-    class: 'a-mini',
-    onclick: () => {
-      preview.hidden = !preview.hidden;
-      toggle.textContent = preview.hidden ? 'show preview' : 'hide preview';
-      if (!preview.hidden) renderPreview();
-    },
-  }, 'show preview');
+  if (!state.now) {
+    viewEl.replaceChildren(
+      pageHead('now page', 'the /now content file', []),
+      el('div', { class: 'a-card' },
+        el('div', { class: 'a-card__head' }, el('h2', {}, 'not created yet')),
+        el('p', { class: 'a-note' }, 'The now page file does not exist in the repo yet.'),
+        el('button', { class: 'a-btn a-btn--primary', onclick: createNowFile }, 'create now.md'),
+      ),
+    );
+    return;
+  }
 
-  const wasFs = !!fsCard;
-  if (wasFs) exitFullscreen();
-
-  const card = el('div', { class: 'a-card' },
-    el('div', { class: 'a-card__head' },
-      el('h2', { class: 'a-h2' }, 'now page'),
-      dirtyDot,
+  viewEl.replaceChildren(
+    pageHead('now page', 'the classic /now page', [
+      el('a', { class: 'a-out', href: `${BASE}now`, target: '_blank', rel: 'noopener' }, 'view page ↗'),
+      saveBtn,
+    ]),
+    el('div', { class: 'a-card' },
+      el('div', { class: 'a-card__head' },
+        el('h2', {}, 'now content'),
+        dirtyDot,
+      ),
+      el('div', { class: 'a-meta-grid' },
+        el('label', { class: 'a-label' }, 'last updated', updatedInput),
+      ),
+      el('div', { class: 'a-toolbar' },
+        el('div', {}, stats),
+        el('div', { class: 'a-toolbar__right' },
+          el('span', {}, 'images: upload, drag & drop, or paste'),
+        ),
+      ),
+      chipsEl,
+      editorHost,
+      el('p', { class: 'a-hint' }, 'file: ',
+        el('a', { class: 'a-out a-mono', href: githubLink, target: '_blank', rel: 'noopener' }, 'src/content/now/now.md ↗'),
+      ),
     ),
-    state.now
-      ? [
-          el('p', { class: 'a-note' }, 'The /now page — a running list of what you\'re up to.'),
-          el('label', { class: 'a-field' }, 'last updated', updatedInput),
-          rtoolbarEl,
-          chipsEl,
-          el('div', { class: 'a-toolbar' },
-            el('div', { class: 'a-toolbar__right' }, stats, toggle),
-          ),
-          el('div', { class: 'a-body' }, body, preview),
-          el('div', { class: 'a-btn-row' }, saveBtn),
-          el('p', { class: 'a-path' }, 'file: ',
-            el('a', { class: 'a-out a-mono', href: githubLink, target: '_blank', rel: 'noopener' }, 'src/content/now/now.md ↗'),
-          ),
-        ]
-      : [
-          el('p', { class: 'a-note' }, 'The now page file does not exist in the repo yet.'),
-          el('button', { class: 'a-btn a-btn--accent', onclick: createNowFile }, 'create now.md'),
-        ],
   );
 
-  viewEl.replaceChildren(card);
+  updateStats();
+}
 
-  if (state.now) {
-    setupRichEditor({
-      textarea: body,
-      toolbarEl: rtoolbarEl,
-      onFiles: stageFiles,
-      onSave: save,
-      onFullscreen: () => toggleFullscreen(card),
-    });
-    if (wasFs) toggleFullscreen(card);
-    updateStats();
-  }
+// ── theme toggle ─────────────────────────────
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try {
+    localStorage.setItem('theme', next);
+  } catch {}
+  syncThemeBtn();
+}
+
+function syncThemeBtn() {
+  const btn = $('#a-theme');
+  if (btn) btn.textContent = document.documentElement.dataset.theme === 'dark' ? '☀' : '🌙';
 }
 
 // ── lock / bootstrap ─────────────────────────
-function showLock(msg) {
+function showLock() {
   lockVisible(true);
   $('#a-token').value = store.get(KEYS.token);
-  const owner = store.get(KEYS.owner) || defaultOwner();
-  const repo = store.get(KEYS.repo) || defaultRepo();
-  $('#a-owner').value = owner;
-  $('#a-repo').value = repo;
+  $('#a-owner').value = store.get(KEYS.owner) || defaultOwner();
+  $('#a-repo').value = store.get(KEYS.repo) || defaultRepo();
   const btn = $('#a-connect');
   if (btn) {
     btn.disabled = false;
     btn.textContent = 'connect';
   }
-  if (msg) toast(msg, 'error');
 }
 
 function defaultOwner() {
@@ -1235,6 +1781,7 @@ function lockUp() {
   state.posts = [];
   state.settings = null;
   state.now = null;
+  state.tree = null;
   state.dirty = false;
   state.scopeWarn = null;
   store.clear();
@@ -1248,21 +1795,27 @@ function lockUp() {
 export function mount() {
   if (document.body.dataset.adminMounted) return;
   document.body.dataset.adminMounted = '1';
+  document.body.classList.add('a-body');
 
   $('#a-connect').addEventListener('click', () => connect(false));
   $('#a-lock-btn').addEventListener('click', lockUp);
+  $('#a-theme').addEventListener('click', toggleTheme);
+  syncThemeBtn();
 
   $('#a-token').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') connect(false);
   });
 
   window.addEventListener('hashchange', onHashChange);
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && fsCard) exitFullscreen();
-  });
   window.addEventListener('beforeunload', (e) => {
     if (state.dirty) e.preventDefault();
   });
+
+  // keep ToastUI editors in sync with the light/dark theme
+  new MutationObserver(() => editors.forEach(syncEditorTheme)).observe(
+    document.documentElement,
+    { attributes: true, attributeFilter: ['data-theme'] },
+  );
 
   // auto-connect if a token is stored
   const token = store.get(KEYS.token);

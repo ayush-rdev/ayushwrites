@@ -2,6 +2,11 @@
 #
 # One manual step required once:
 #   repository Settings → Pages → Source: "GitHub Actions"
+#
+# Scheduled rebuild (twice a day, UTC): posts with a future pubDate are
+# hidden at build time, so this re-deploys each day to publish them
+# automatically on their date. A rebuild with no source change simply
+# re-deploys the same content — harmless, ~1 min of Actions.
 name: Deploy to GitHub Pages
 
 on:
@@ -9,6 +14,9 @@ on:
     branches: [main]
   # allows running the workflow manually from the Actions tab
   workflow_dispatch:
+  # scheduled publishing — lets future-dated posts go live on their date
+  schedule:
+    - cron: '0 4,16 * * *'
 
 # allow this job to clone the repo and create a page deployment
 permissions:

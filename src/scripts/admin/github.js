@@ -23,6 +23,14 @@ export function decodeBase64(b64) {
   return new TextDecoder().decode(bytes);
 }
 
+/** contents-API-safe path: slashes kept, special chars encoded per segment */
+export function encPath(path) {
+  return String(path)
+    .split('/')
+    .map((s) => encodeURIComponent(s))
+    .join('/');
+}
+
 export class GitHub {
   constructor(token, owner, repo) {
     this.token = token;
@@ -78,7 +86,7 @@ export class GitHub {
   async getTextFile(path) {
     const j = await this.req(
       'GET',
-      `/repos/${this.owner}/${this.repo}/contents/${path}`,
+      `/repos/${this.owner}/${this.repo}/contents/${encPath(path)}`,
     );
     return {
       path,
@@ -91,9 +99,22 @@ export class GitHub {
   async listDir(path) {
     const j = await this.req(
       'GET',
-      `/repos/${this.owner}/${this.repo}/contents/${path}`,
+      `/repos/${this.owner}/${this.repo}/contents/${encPath(path)}`,
     );
     return Array.isArray(j) ? j : [];
+  }
+
+  /** recursive file listing of the whole repo (blobs only) */
+  async listTree() {
+    if (!this.branch) {
+      const info = await this.repoInfo();
+      this.branch = info.default_branch;
+    }
+    const j = await this.req(
+      'GET',
+      `/repos/${this.owner}/${this.repo}/git/trees/${this.branch}?recursive=1`,
+    );
+    return (j.tree || []).filter((e) => e.type === 'blob' && e.path);
   }
 
   /** most recent Actions workflow run (for deploy status) */
@@ -105,6 +126,26 @@ export class GitHub {
       )}`,
     );
     return j.workflow_runs?.[0] || null;
+  }
+
+  /** recent workflow runs on the default branch */
+  async listWorkflowRuns(perPage = 8) {
+    const j = await this.req(
+      'GET',
+      `/repos/${this.owner}/${this.repo}/actions/runs?per_page=${perPage}&branch=${encodeURIComponent(
+        this.branch || 'main',
+      )}`,
+    );
+    return j.workflow_runs || [];
+  }
+
+  /** kick off the deploy workflow (needs workflow permission on the token) */
+  async triggerWorkflow() {
+    await this.req(
+      'POST',
+      `/repos/${this.owner}/${this.repo}/actions/workflows/deploy.yml/dispatches`,
+      { ref: this.branch || 'main' },
+    );
   }
 
   /**
