@@ -21,12 +21,15 @@ interface Props {
    * them, which breaks a hash-routed app. The admin opts out entirely.
    */
   transition?: boolean;
+  /** chrome = true renders the site header/footer; false hides them (admin). */
+  chrome?: boolean;
 }
 
 const {
   title = SITE.title,
   description = SITE.description,
   transition = true,
+  chrome = true,
 } = Astro.props;
 
 const base = BASE;
@@ -112,7 +115,7 @@ const pageAnim = {
       })();
     </script>
   </head>
-  <body id="top">
+  <body id="top" class={chrome ? undefined : 'no-chrome'}>
     <a class="skip-link" href="#main">skip to content</a>
     <Header />
     <main

@@ -48,10 +48,34 @@
   color-scheme: dark;
 }
 
-/* the admin owns the page — hide the blog header/footer */
+/* the admin owns the page — hide the blog header/footer. The .no-chrome
+   class is set statically on the admin page (no JS flash), and .a-body is
+   added by the app at boot. */
+body.no-chrome .site-head,
+body.no-chrome .site-foot,
 body.a-body .site-head,
 body.a-body .site-foot {
   display: none;
+}
+
+/* plain-textarea fallback when the rich editor can't load */
+.a-fallback {
+  width: 100%;
+  min-height: 460px;
+  padding: 0.9rem 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--a-text);
+  background: var(--a-bg);
+  border: 1px solid var(--a-border);
+  border-radius: 10px;
+  resize: vertical;
+  outline: none;
+}
+.a-fallback:focus {
+  border-color: var(--a-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--a-accent) 18%, transparent);
 }
 
 body.a-body .page {

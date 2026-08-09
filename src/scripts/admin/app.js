@@ -8,10 +8,26 @@
 //  workflow runs it.
 // ─────────────────────────────────────────────
 
-import Editor from '@toast-ui/editor';
+// ToastUI's CSS stays in the main bundle (small); the editor JS (~300 KB)
+// and the zip exporter load lazily so the admin shell stays light and
+// navigation stays instant.
 import '@toast-ui/editor/dist/toastui-editor.css';
 import '@toast-ui/editor/dist/theme/toastui-editor-dark.css';
-import { zipSync, strToU8 } from 'fflate';
+
+let EditorCtor = null;
+async function loadEditor() {
+  if (!EditorCtor) {
+    const mod = await import('@toast-ui/editor');
+    EditorCtor = mod.default;
+  }
+  return EditorCtor;
+}
+
+let fflateMod = null;
+async function loadFflate() {
+  if (!fflateMod) fflateMod = await import('fflate');
+  return fflateMod;
+}
 
 import { GitHub } from './github.js';
 import { fileToBase64, baseName, imagePathFor, MAX_IMAGE_BYTES } from './editor-tools.js';
@@ -52,11 +68,21 @@ function el(tag, attrs = {}, ...children) {
 }
 
 // ── localStorage (wrapped so private mode can't crash us) ──
-const KEYS = { token: 'mc_admin_token', owner: 'mc_admin_owner', repo: 'mc_admin_repo' };
+const KEYS = {
+  token: 'mc_admin_token',
+  owner: 'mc_admin_owner',
+  repo: 'mc_admin_repo',
+  autoLock: 'mc_admin_autolock',
+};
 const store = {
   get(k) { try { return localStorage.getItem(k) ?? ''; } catch { return ''; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
-  clear() { try { Object.values(KEYS).forEach((k) => localStorage.removeItem(k)); } catch {} },
+  // wipe credentials only — keep preferences like the auto-lock toggle
+  clear() {
+    try {
+      ['token', 'owner', 'repo'].forEach((k) => localStorage.removeItem(KEYS[k]));
+    } catch {}
+  },
 };
 
 // ── state ────────────────────────────────────
@@ -74,6 +100,7 @@ const state = {
 
 // true while a commit is in flight — blocks double-submits
 let actionBusy = false;
+let lockTimer = null; // auto-lock countdown
 
 const ui = {
   postsFilter: 'all',
@@ -86,13 +113,17 @@ const editors = new Set();
 // editors currently attached to the rendered view — destroyed on re-render
 let activeEditors = [];
 
+function disposeOneEditor(e) {
+  if (!e) return;
+  try {
+    e.destroy();
+  } catch {}
+  editors.delete(e);
+  activeEditors = activeEditors.filter((x) => x !== e);
+}
+
 function disposeEditors() {
-  for (const e of activeEditors) {
-    try {
-      e.destroy();
-    } catch {}
-    editors.delete(e);
-  }
+  for (const e of activeEditors) disposeOneEditor(e);
   activeEditors = [];
 }
 
@@ -199,6 +230,7 @@ async function connect(silent = false) {
     $('#a-repo-line').textContent = `${owner}/${repo} · ${gh.branch}`;
     if (!silent) toast(`connected as @${me.login} — ${owner}/${repo}`, 'success');
     lockVisible(false);
+    armAutoLock();
     if (!location.hash) location.hash = '#/dashboard';
     await loadAll();
   } catch (e) {
@@ -303,17 +335,22 @@ function renderRoute() {
     view === 'file' ? 'files' : view;
   syncNav();
 
-  if (view === 'posts') renderPosts(viewEl);
-  else if (view === 'new' || view === 'edit') renderEditor(viewEl, view === 'edit' ? arg : null);
-  else if (view === 'media') renderMedia(viewEl);
-  else if (view === 'files') renderFiles(viewEl);
-  else if (view === 'file') renderFile(viewEl, arg);
-  else if (view === 'tags') renderTags(viewEl);
-  else if (view === 'tools') renderTools(viewEl);
-  else if (view === 'deploy') renderDeploy(viewEl);
-  else if (view === 'settings') renderSettings(viewEl);
-  else if (view === 'now') renderNow(viewEl);
-  else renderDashboard(viewEl);
+  try {
+    if (view === 'posts') renderPosts(viewEl);
+    else if (view === 'new' || view === 'edit') renderEditor(viewEl, view === 'edit' ? arg : null);
+    else if (view === 'media') renderMedia(viewEl);
+    else if (view === 'files') renderFiles(viewEl);
+    else if (view === 'file') renderFile(viewEl, arg);
+    else if (view === 'tags') renderTags(viewEl);
+    else if (view === 'tools') renderTools(viewEl);
+    else if (view === 'deploy') renderDeploy(viewEl);
+    else if (view === 'settings') renderSettings(viewEl);
+    else if (view === 'now') renderNow(viewEl);
+    else renderDashboard(viewEl);
+  } catch (err) {
+    // one broken view must never dead-end the admin — show a recoverable card
+    viewEl.replaceChildren(errorCard(err));
+  }
 }
 
 function syncNav() {
@@ -323,18 +360,46 @@ function syncNav() {
 }
 
 // ── ToastUI editor helper ────────────────────
-function createEditor({ container, value, onChange, onImage }) {
-  const editor = new Editor({
-    el: container,
-    height: 'auto',
-    minHeight: '460px',
-    initialEditType: 'markdown',
-    previewStyle: 'vertical',
-    initialValue: value || '',
-    placeholder: 'write here… (markdown or rich text)',
-    hideModeSwitch: false,
-    usageStatistics: false,
-  });
+/** graceful fallback: a plain textarea that mimics the editor's API */
+function fallbackEditor(container, value, onChange) {
+  container.replaceChildren();
+  const ta = document.createElement('textarea');
+  ta.className = 'a-fallback';
+  ta.spellcheck = false;
+  ta.value = value || '';
+  container.append(ta);
+  if (onChange) ta.addEventListener('input', onChange);
+  return {
+    getMarkdown: () => ta.value,
+    setMarkdown: (v) => { ta.value = v; },
+    on: () => {},
+    addHook: () => {},
+    getRootElement: () => ta,
+    destroy: () => {},
+  };
+}
+
+async function createEditor({ container, value, onChange, onImage }) {
+  let editor;
+  try {
+    const Ctor = await loadEditor();
+    container.replaceChildren(); // drop any "loading…" placeholder
+    editor = new Ctor({
+      el: container,
+      height: 'auto',
+      minHeight: '460px',
+      initialEditType: 'markdown',
+      previewStyle: 'vertical',
+      initialValue: value || '',
+      placeholder: 'write here… (markdown or rich text)',
+      hideModeSwitch: false,
+      usageStatistics: false,
+    });
+  } catch (err) {
+    console.error('rich editor failed to start — using plain textarea', err);
+    toast('rich editor unavailable — using a plain textarea', 'error');
+    return fallbackEditor(container, value, onChange);
+  }
   if (onChange) editor.on('change', onChange);
   if (onImage) {
     editor.addHook('addImageBlobHook', (blob, callback) => {
@@ -488,10 +553,22 @@ async function refreshDeployCard() {
 }
 
 // ── shared page header ───────────────────────
+function errorCard(err) {
+  console.error('admin view failed:', err);
+  return el('div', { class: 'a-card' },
+    el('div', { class: 'a-card__head' }, el('h2', {}, 'this view hit a snag')),
+    el('p', { class: 'a-note' }, String(err?.message || err)),
+    el('div', { class: 'a-btn-row' },
+      el('button', { class: 'a-btn', onclick: () => renderRoute() }, 'try again'),
+      el('button', { class: 'a-btn', onclick: () => loadAll() }, 'reload data'),
+    ),
+  );
+}
+
 function pageHead(title, sub, actions = []) {
   return el('div', { class: 'a-topbar' },
     el('div', {},
-      el('h1', {}, title),
+      el('h1', { tabindex: -1 }, title),
       sub ? el('p', { class: 'a-topbar__sub' }, sub) : null,
     ),
     actions.length ? el('div', { class: 'a-topbar__right' }, ...actions) : null,
@@ -680,16 +757,53 @@ function renderEditor(viewEl, id) {
     oninput: markDirty,
   });
 
-  const editorHost = el('div', { class: 'a-editor-host' });
-  const editor = createEditor({
-    container: editorHost,
-    value: src.body,
-    onChange: () => {
-      markDirty();
-      updateStats();
-    },
-    onImage: stageEditorImage,
-  });
+  const editorHost = el('div', { class: 'a-editor-host' }, el('p', { class: 'a-note' }, 'loading editor…'));
+  let editor = null;
+  // the rich editor (~300 KB) loads lazily; if it fails it degrades to a
+  // plain textarea — saving and images keep working either way
+  (async () => {
+    try {
+      const e = await createEditor({
+        container: editorHost,
+        value: src.body,
+        onChange: () => {
+          markDirty();
+          updateStats();
+        },
+        onImage: stageEditorImage,
+      });
+      // the user may have navigated away while the editor was loading —
+      // don't keep an editor attached to a detached host
+      if (!editorHost.isConnected) {
+        disposeOneEditor(e);
+        return;
+      }
+      editor = e;
+    } catch (err) {
+      console.error('editor failed to load — using plain textarea', err);
+      if (editorHost.isConnected) {
+        editor = fallbackEditor(editorHost, src.body, () => {
+          markDirty();
+          updateStats();
+        });
+      }
+      return;
+    }
+    updateStats();
+  })();
+
+  function currentMarkdown() {
+    if (editor) return editor.getMarkdown();
+    const ta = editorHost.querySelector('textarea');
+    return ta ? ta.value : '';
+  }
+  function setEditorMarkdown(v) {
+    if (editor) editor.setMarkdown(v, false);
+    else {
+      const ta = editorHost.querySelector('textarea');
+      if (ta) ta.value = v;
+    }
+  }
 
   // ── staged images ──
   const pendingImages = [];
@@ -711,10 +825,10 @@ function renderEditor(viewEl, id) {
     if (idx === -1) return;
     pendingImages.splice(idx, 1);
     // remove the *last* occurrence — matches the most recently inserted copy
-    const md = editor.getMarkdown();
+    const md = currentMarkdown();
     const at = md.lastIndexOf(img.md);
     if (at !== -1) {
-      editor.setMarkdown(md.slice(0, at) + md.slice(at + img.md.length), false);
+      setEditorMarkdown(md.slice(0, at) + md.slice(at + img.md.length));
     }
     renderChips();
     updateStats();
@@ -743,7 +857,7 @@ function renderEditor(viewEl, id) {
   // ── stats + schedule ──
   const stats = el('span', { class: 'a-mono' }, '');
   function updateStats() {
-    const md = editor.getMarkdown();
+    const md = currentMarkdown();
     const w = countWords(md);
     const mins = Math.max(1, Math.ceil(w / 220));
     stats.textContent = `${w} words · ${md.length} chars · ${mins} min read`;
@@ -779,6 +893,10 @@ function renderEditor(viewEl, id) {
 
   async function save() {
     if (actionBusy) return;
+    if (!editor) {
+      toast('editor still loading — wait a second', 'info');
+      return;
+    }
     const title = titleInput.value.trim();
     let slug = slugInput.value.trim() || slugify(title);
     if (!slug) {
@@ -807,7 +925,7 @@ function renderEditor(viewEl, id) {
       updatedDate: updatedDate.value || undefined,
       tags,
       draft,
-      body: editor.getMarkdown(),
+      body: currentMarkdown(),
     });
     const newPath = `src/content/blog/${slug}.md`;
     // snapshot BEFORE the await — images staged while the commit is in flight
@@ -866,16 +984,24 @@ function renderEditor(viewEl, id) {
       updatedDate: updatedDate.value || undefined,
       tags: tagsInput.value.split(',').map((s) => s.trim()).filter(Boolean),
       draft: draftBox.checked,
-      body: editor.getMarkdown(),
+      body: currentMarkdown(),
     });
   }
 
   async function copyMd() {
+    if (!editor) {
+      toast('editor still loading — wait a second', 'info');
+      return;
+    }
     if (await copyText(fullMarkdown())) toast('markdown copied', 'info');
     else toast('could not copy', 'error');
   }
 
   function downloadMd() {
+    if (!editor) {
+      toast('editor still loading — wait a second', 'info');
+      return;
+    }
     const blob = new Blob([fullMarkdown()], { type: 'text/markdown' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1370,7 +1496,15 @@ function renderTools(viewEl) {
     }
   }
 
-  function exportAll() {
+  async function exportAll() {
+    let zipSync, strToU8;
+    try {
+      ({ zipSync, strToU8 } = await loadFflate());
+    } catch (err) {
+      console.error(err);
+      toast('could not load the zip library — check your connection', 'error');
+      return;
+    }
     const files = {};
     for (const p of state.posts) {
       files[`posts/${p.id}.md`] = strToU8(buildPostMarkdown({ ...p.data, body: p.body }));
@@ -1562,6 +1696,15 @@ function renderSettings(viewEl) {
         el('a', { class: 'a-out a-mono', href: githubLink, target: '_blank', rel: 'noopener' }, 'src/consts.ts ↗'),
       ),
     ),
+    el('div', { class: 'a-card' },
+      el('div', { class: 'a-card__head' }, el('h2', {}, 'security')),
+      el('p', { class: 'a-note' }, 'The token lives only in this browser. Locking clears it; auto-lock does it for you.'),
+      el('label', { class: 'a-check' },
+        el('input', { class: 'a-checkbox', type: 'checkbox', id: 's-autolock', checked: autoLockEnabled(),
+          onchange: (e) => store.set(KEYS.autoLock, e.target.checked ? '1' : '0') }),
+        `auto-lock after ${AUTO_LOCK_MIN} minutes of inactivity`,
+      ),
+    ),
   );
 }
 
@@ -1579,17 +1722,47 @@ function renderNow(viewEl) {
     dirtyDot.hidden = false;
   }
 
-  const editorHost = el('div', { class: 'a-editor-host' });
-  const editor = createEditor({
-    container: editorHost,
-    value: state.now?.body || '',
-    onChange: () => { markDirty(); updateStats(); },
-    onImage: stageEditorImage,
-  });
+  const editorHost = el('div', { class: 'a-editor-host' }, el('p', { class: 'a-note' }, 'loading editor…'));
+  let editor = null;
+  (async () => {
+    try {
+      const e = await createEditor({
+        container: editorHost,
+        value: state.now?.body || '',
+        onChange: () => { markDirty(); updateStats(); },
+        onImage: stageEditorImage,
+      });
+      if (!editorHost.isConnected) {
+        disposeOneEditor(e);
+        return;
+      }
+      editor = e;
+    } catch (err) {
+      console.error('editor failed to load — using plain textarea', err);
+      if (editorHost.isConnected) {
+        editor = fallbackEditor(editorHost, state.now?.body || '', () => { markDirty(); updateStats(); });
+      }
+      return;
+    }
+    updateStats();
+  })();
+
+  function currentMarkdown() {
+    if (editor) return editor.getMarkdown();
+    const ta = editorHost.querySelector('textarea');
+    return ta ? ta.value : '';
+  }
+  function setEditorMarkdown(v) {
+    if (editor) editor.setMarkdown(v, false);
+    else {
+      const ta = editorHost.querySelector('textarea');
+      if (ta) ta.value = v;
+    }
+  }
 
   const stats = el('span', { class: 'a-mono' }, '');
   function updateStats() {
-    const md = editor.getMarkdown();
+    const md = currentMarkdown();
     const w = countWords(md);
     stats.textContent = `${w} words · ${Math.max(1, Math.ceil(w / 220))} min read`;
   }
@@ -1610,9 +1783,9 @@ function renderNow(viewEl) {
     const idx = pendingImages.indexOf(img);
     if (idx === -1) return;
     pendingImages.splice(idx, 1);
-    const md = editor.getMarkdown();
+    const md = currentMarkdown();
     const at = md.lastIndexOf(img.md);
-    if (at !== -1) editor.setMarkdown(md.slice(0, at) + md.slice(at + img.md.length), false);
+    if (at !== -1) setEditorMarkdown(md.slice(0, at) + md.slice(at + img.md.length));
     renderChips();
     markDirty();
   }
@@ -1640,11 +1813,15 @@ function renderNow(viewEl) {
 
   async function save() {
     if (actionBusy) return;
+    if (!editor) {
+      toast('editor still loading — wait a second', 'info');
+      return;
+    }
     actionBusy = true;
     saveBtn.disabled = true;
     setBusy(true);
     try {
-      const content = buildNowMarkdown({ updated: updatedInput.value.trim(), body: editor.getMarkdown() });
+      const content = buildNowMarkdown({ updated: updatedInput.value.trim(), body: currentMarkdown() });
       const staged = pendingImages.slice(); // snapshot before the await
       const files = [{ path: 'src/content/now/now.md', content }];
       for (const img of staged) files.push({ path: img.path, content: img.content, encoding: 'base64' });
@@ -1775,8 +1952,11 @@ function defaultRepo() {
   return BASE.replace(/\//g, '') || '';
 }
 
-function lockUp() {
-  if (!window.confirm('Lock the admin and forget the token?')) return;
+function forceLock() {
+  if (lockTimer) {
+    clearTimeout(lockTimer);
+    lockTimer = null;
+  }
   state.gh = null;
   state.posts = [];
   state.settings = null;
@@ -1789,6 +1969,28 @@ function lockUp() {
   lockVisible(true);
   $('#a-token').value = '';
   $('#a-view').replaceChildren();
+}
+
+function lockUp() {
+  if (!window.confirm('Lock the admin and forget the token?')) return;
+  forceLock();
+}
+
+// ── auto-lock (security) ─────────────────────
+const AUTO_LOCK_MIN = 30;
+function autoLockEnabled() {
+  return store.get(KEYS.autoLock) !== '0';
+}
+function armAutoLock() {
+  if (!autoLockEnabled()) return;
+  if (lockTimer) clearTimeout(lockTimer);
+  lockTimer = setTimeout(autoLockNow, AUTO_LOCK_MIN * 60 * 1000);
+}
+function autoLockNow() {
+  lockTimer = null;
+  if (!state.gh || !autoLockEnabled()) return;
+  toast('auto-locked after inactivity — token cleared', 'info');
+  forceLock();
 }
 
 // ── boot ─────────────────────────────────────
@@ -1808,7 +2010,8 @@ export function mount() {
 
   window.addEventListener('hashchange', onHashChange);
   window.addEventListener('beforeunload', (e) => {
-    if (state.dirty) e.preventDefault();
+    if (!state.dirty) return;
+    e.preventDefault(); // enough to trigger the browser's leave-confirmation
   });
 
   // safety net: guarantee hash navigation even if another handler swallows
@@ -1823,6 +2026,23 @@ export function mount() {
     const h = a.getAttribute('href');
     if (h && h !== location.hash) location.hash = h;
   });
+
+  // surface failures instead of failing silently — a toast beats a dead view
+  window.addEventListener('error', (e) => {
+    console.error('admin error:', e.error || e.message);
+    toast(`error: ${e.message || 'unknown'}`, 'error');
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    console.error('admin unhandled rejection:', e.reason);
+    toast(`error: ${e.reason?.message || 'unknown error'}`, 'error');
+  });
+
+  // activity keeps the auto-lock timer topped up
+  ['pointerdown', 'keydown', 'scroll'].forEach((ev) =>
+    document.addEventListener(ev, () => {
+      if (state.gh) armAutoLock();
+    }, { passive: true }),
+  );
 
   // keep ToastUI editors in sync with the light/dark theme
   new MutationObserver(() => editors.forEach(syncEditorTheme)).observe(
