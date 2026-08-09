@@ -71,6 +71,9 @@ const pageAnim = {
 
     <title>{pageTitle}</title>
 
+    <!-- extra head content, e.g. robots meta for the admin page -->
+    <slot name="head" />
+
     <!-- set the theme before first paint, so there's no flash of the wrong one -->
     <script is:inline>
       (function () {

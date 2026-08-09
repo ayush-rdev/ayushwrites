@@ -1,38 +1,24 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Squiggle from '../components/Squiggle.astro';
+import { getCollection, render } from 'astro:content';
+
+// the page content lives in src/content/now/now.md — editable from /admin
+const [nowEntry] = await getCollection('now');
+const { Content } = await render(nowEntry);
+const updated = nowEntry.data.updated;
 ---
 <BaseLayout title="now">
   <article class="post">
     <header class="post__header">
       <h1>now</h1>
-      <p class="post__meta">last updated: august 2026</p>
+      {updated && <p class="post__meta">last updated: {updated}</p>}
     </header>
 
     <Squiggle />
 
     <div class="prose">
-      <p>
-        The classic <a href="https://nownownow.com/about">now page</a> — a
-        running list of what I'm currently up to. Edit
-        <code>src/pages/now.astro</code> and keep it honest.
-      </p>
-
-      <h2>building</h2>
-      <ul>
-        <li>this blog, slowly but surely</li>
-        <li>a thing that doesn't need to exist yet</li>
-      </ul>
-
-      <h2>reading</h2>
-      <ul>
-        <li>whatever's on the nightstand</li>
-      </ul>
-
-      <h2>thinking about</h2>
-      <ul>
-        <li>the indie web, small software, and doing less</li>
-      </ul>
+      <Content />
     </div>
   </article>
 </BaseLayout>

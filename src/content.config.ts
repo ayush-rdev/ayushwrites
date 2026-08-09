@@ -15,4 +15,12 @@ const blog = defineCollection({
   }),
 });
 
-export const collections = { blog };
+// the /now page — editable from the admin, just like posts
+const now = defineCollection({
+  loader: glob({ base: './src/content/now', pattern: '**/*.{md,mdx}' }),
+  schema: z.object({
+    updated: z.string().optional(),
+  }),
+});
+
+export const collections = { blog, now };

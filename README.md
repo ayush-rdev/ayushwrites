@@ -42,15 +42,18 @@ npm run preview   # preview the production build
 │   └── favicon.svg           # hand-drawn asterisk
 └── src/
     ├── consts.ts             # ✏️ site title, author, description — edit me first
-    ├── content.config.ts     # blog collection schema (frontmatter validation)
+    ├── content.config.ts     # blog + now collection schemas (frontmatter validation)
     ├── content/blog/         # ✏️ write posts here as .md files
+    ├── content/now/now.md    # ✏️ the /now page, editable from the admin
     ├── styles/global.css     # all the indie/hand-drawn styling lives here
     ├── layouts/BaseLayout.astro
     ├── components/           # Header, Footer, PostCard, Squiggle divider
+    ├── scripts/admin/        # the /admin SPA (app.js, github.js, content.js)
     └── pages/
         ├── index.astro       # homepage (hero + latest writings)
         ├── about.astro       # bio + colophon
         ├── now.astro         # classic indie-web "now" page
+        ├── admin.astro       # hidden back office (token-gated, noindex)
         ├── posts/[...slug].astro  # single-post pages (auto-generated)
         ├── rss.xml.js        # RSS feed at /rss.xml
         └── 404.astro
@@ -66,6 +69,44 @@ npm run preview   # preview the production build
 4. **Tune the look** — all colors, fonts, and quirks are CSS custom properties
    at the top of `src/styles/global.css`.The handwritten font (Caveat) is self-hosted via
 `@fontsource/caveat` — zero third-party requests.
+
+## admin (hidden back office)
+
+There's a small admin app at **`/admin`** (not linked from the nav, and
+`noindex`'d). It manages the blog straight from the browser through the
+GitHub API — no server, no database:
+
+- **dashboard** — post stats, recent writings, live deploy status of the
+  GitHub Actions workflow
+- **posts** — create, edit, delete, duplicate, search, filter, and flip
+  publish/draft for every post
+- **editor** — title, dates, slug, tags, draft toggle, description, and a
+  markdown body with a **rich formatting toolbar** (bold, italic,
+  strikethrough, headings, lists, quotes, links, code blocks, tables, HR),
+  keyboard shortcuts (Ctrl+B/I/E, Ctrl+Shift+X/L/1-3, Ctrl+Enter to save),
+  write / preview / split modes,
+  word count + reading time, fullscreen, and copy/download
+- **images** — add images to any post or the now page via the 🖼 button,
+  drag-and-drop, or paste; they're uploaded to `public/images/` and committed
+  together with your save
+- **settings** — the `SITE` fields in `src/consts.ts` (title, author,
+  description)
+- **now** — the `/now` page content, now stored in `src/content/now/now.md`
+
+Every save is **one commit to the repo** (the git data API) — including any
+images you've attached — which triggers the deploy workflow; publish from
+the browser, site updates in about a minute.
+
+**One-time setup:** open `/admin`, paste a GitHub **personal access token**
+with contents read & write on this repo (a
+[fine-grained token](https://github.com/settings/personal-access-tokens/new)
+scoped to this repo, or a classic token with `repo` scope). The token lives
+only in your browser's `localStorage` and talks to `api.github.com`
+directly. Use the **lock** button in the admin to forget it.
+
+The admin's code lives in `src/pages/admin.astro` (shell + styles) and
+`src/scripts/admin/` (`app.js` SPA, `github.js` API client,
+`content.js` frontmatter/consts helpers).
 
 ## deploying
 
