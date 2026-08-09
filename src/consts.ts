@@ -9,8 +9,9 @@ export const SITE = {
   author: 'Ayush',
   /** Short line used in meta descriptions + RSS feed */
   description: 'Personal blog of Ayush(me)(⁠ ⁠◜⁠‿⁠◝⁠ ⁠)⁠♡',
-  /** Canonical site URL (also used in astro.config.mjs) */
-  url: 'https://ayush-rdev.github.io/ayushwrites',
+  /** Canonical site URL — the root domain, WITHOUT the base path (the base
+      path is appended automatically via BASE, e.g. og:url = this + base) */
+  url: 'https://ayush-rdev.github.io',
   /** Language of the site, for the <html lang> attribute */
   lang: 'en',
 } as const;
