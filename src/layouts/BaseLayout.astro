@@ -14,11 +14,19 @@ import '../styles/global.css';
 interface Props {
   title?: string;
   description?: string;
+  /**
+   * Set false on pages that manage their own navigation (the admin SPA).
+   * Astro's ClientRouter intercepts EVERY same-origin anchor click — including
+   * pure hash links like `#/posts` — and runs a view-transition navigate() on
+   * them, which breaks a hash-routed app. The admin opts out entirely.
+   */
+  transition?: boolean;
 }
 
 const {
   title = SITE.title,
   description = SITE.description,
+  transition = true,
 } = Astro.props;
 
 const base = BASE;
@@ -60,8 +68,8 @@ const pageAnim = {
     <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
     <link rel="alternate" type="application/rss+xml" title={SITE.title} href={`${base}rss.xml`} />
 
-    <!-- client-side page transitions -->
-    <ClientRouter />
+    <!-- client-side page transitions (skipped on pages that own their routing) -->
+    {transition && <ClientRouter />}
 
     <!-- open graph -->
     <meta property="og:type" content="website" />

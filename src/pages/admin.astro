@@ -6,7 +6,7 @@ import '../styles/admin.css';
 const base = BASE;
 const defaultOwner = SITE.url ? new URL(SITE.url).hostname.split('.')[0] : '';
 ---
-<BaseLayout title="admin">
+<BaseLayout title="admin" transition={false}>
   <Fragment slot="head">
     <meta name="robots" content="noindex, nofollow" />
   </Fragment>

@@ -1811,6 +1811,19 @@ export function mount() {
     if (state.dirty) e.preventDefault();
   });
 
+  // safety net: guarantee hash navigation even if another handler swallows
+  // anchor clicks (e.g. a view-transitions router). Setting the hash here is
+  // idempotent — the native default click and our hashchange router both
+  // agree, and no-op when the hash is unchanged.
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    const t = e.target;
+    const a = t && t.closest ? t.closest('a[href^="#/"]') : null;
+    if (!a) return;
+    const h = a.getAttribute('href');
+    if (h && h !== location.hash) location.hash = h;
+  });
+
   // keep ToastUI editors in sync with the light/dark theme
   new MutationObserver(() => editors.forEach(syncEditorTheme)).observe(
     document.documentElement,
