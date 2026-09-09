@@ -6,8 +6,9 @@ const path = Astro.url.pathname;
 
 const links = [
   { href: base, label: 'writings' },
-  { href: `${base}about`, label: 'about' },
-  { href: `${base}now`, label: 'now' },
+  // trailing slash — the Pages host 301s the bare path otherwise
+  { href: `${base}about/`, label: 'about' },
+  { href: `${base}now/`, label: 'now' },
 ];
 ---
 <header class="site-head" transition:persist>

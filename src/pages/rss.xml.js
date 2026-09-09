@@ -11,6 +11,7 @@ export async function GET(context) {
   return rss({
     title: SITE.title,
     description: SITE.description,
+    customData: '<language>en-us</language>',
     // channel link should point at the feed's own subpath
     site: `${context.site}${BASE}`,
     items: posts.map((post) => ({

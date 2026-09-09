@@ -7,13 +7,14 @@ import { BASE, SITE } from '../consts';
 // external stylesheet (bundled + hashed by Astro, latin-only subsets since
 // the site is English-only)
 import '@fontsource/caveat/latin-400.css';
-import '@fontsource/caveat/latin-500.css';
 import '@fontsource/caveat/latin-700.css';
 import '../styles/global.css';
 
 interface Props {
   title?: string;
   description?: string;
+  /** Open Graph type — 'article' on posts, 'website' elsewhere */
+  ogType?: 'website' | 'article';
   /**
    * Set false on pages that manage their own navigation (the admin SPA).
    * Astro's ClientRouter intercepts EVERY same-origin anchor click — including
@@ -28,12 +29,16 @@ interface Props {
 const {
   title = SITE.title,
   description = SITE.description,
+  ogType = 'website',
   transition = true,
   chrome = true,
 } = Astro.props;
 
 const base = BASE;
 const pageTitle = title === SITE.title ? SITE.title : `${title} — ${SITE.title}`;
+// this page's own URL (base path included) — used for canonical + og:url so
+// every page shares the link correctly instead of pointing at the homepage
+const pageUrl = new URL(Astro.url.pathname, SITE.url).href;
 
 // a soft crossfade with a gentle upward drift — unhurried enough to feel
 // smooth, fast enough to stay out of the way (the easing curve decelerates
@@ -70,15 +75,27 @@ const pageAnim = {
     <meta name="theme-color" content="#faf3e4" />
     <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
     <link rel="alternate" type="application/rss+xml" title={SITE.title} href={`${base}rss.xml`} />
+    <link rel="canonical" href={pageUrl} />
+
+    <!-- privacy-friendly pageview stats (GoatCounter) — only when a site
+         code is set in src/consts.ts; cookie-less, no personal data -->
+    {SITE.analytics && (
+      <script
+        is:inline
+        defer
+        data-goatcounter={`https://${SITE.analytics}.goatcounter.com/count`}
+        src="https://gc.zgo.at/count.js"
+      />
+    )}
 
     <!-- client-side page transitions (skipped on pages that own their routing) -->
     {transition && <ClientRouter />}
 
     <!-- open graph -->
-    <meta property="og:type" content="website" />
+    <meta property="og:type" content={ogType} />
     <meta property="og:title" content={pageTitle} />
     <meta property="og:description" content={description} />
-    <meta property="og:url" content={`${SITE.url}${base}`} />
+    <meta property="og:url" content={pageUrl} />
 
     <title>{pageTitle}</title>
 

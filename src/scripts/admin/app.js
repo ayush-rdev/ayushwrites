@@ -80,6 +80,7 @@ const KEYS = {
   owner: 'mc_admin_owner',
   repo: 'mc_admin_repo',
   autoLock: 'mc_admin_autolock',
+  analyticsSite: 'mc_admin_analytics_site',
 };
 const store = {
   get(k) { try { return localStorage.getItem(k) ?? ''; } catch { return ''; } },
@@ -100,6 +101,7 @@ const state = {
   now: null, // { path, data, body }
   clone: null, // duplicated-post source for the "new" editor
   tree: null, // cached repo file listing
+  stats: null, // cached analytics snapshot (public/stats.json)
   dirty: false,
   lastHash: '#/dashboard',
   scopeWarn: null,
@@ -374,6 +376,7 @@ function renderRoute() {
     if (view === 'posts') renderPosts(viewEl);
     else if (view === 'new' || view === 'edit') renderEditor(viewEl, view === 'edit' ? arg : null);
     else if (view === 'media') renderMedia(viewEl);
+    else if (view === 'analytics') renderAnalytics(viewEl);
     else if (view === 'files') renderFiles(viewEl);
     else if (view === 'file') renderFile(viewEl, arg);
     else if (view === 'tags') renderTags(viewEl);
@@ -506,6 +509,17 @@ function renderDashboard(viewEl) {
       stat('scheduled', scheduled.length, 'auto-publish on date'),
       stat('drafts', drafts.length, 'hidden from listings'),
       stat('words', words.toLocaleString(), 'across all posts'),
+      stat('reads', '—', 'pageviews, last 30 days'),
+    ),
+
+    el('div', { id: 'a-dash-analytics' },
+      el('div', { class: 'a-card' },
+        el('div', { class: 'a-card__head' },
+          el('h2', {}, 'analytics'),
+          el('a', { class: 'a-out', href: '#/analytics' }, 'full stats →'),
+        ),
+        el('div', { id: 'a-dash-stats' }, el('p', { class: 'a-note' }, 'loading…')),
+      ),
     ),
 
     el('div', { class: 'a-grid-2' },
@@ -551,6 +565,43 @@ function renderDashboard(viewEl) {
   );
 
   refreshDeployCard();
+  refreshDashboardStats();
+}
+
+async function refreshDashboardStats() {
+  const stats = await loadStats();
+  const numEl = document.querySelector('.a-stats .a-stat:nth-child(6) .a-stat__num');
+  if (numEl) numEl.textContent = stats ? statsMonthTotal().toLocaleString() : '—';
+  const box = $('#a-dash-stats');
+  if (!box) return;
+  if (!stats) {
+    box.replaceChildren(
+      el('div', { class: 'a-dash-stats__empty' },
+        el('span', {}, '📊 no stats yet — '),
+        el('a', { class: 'a-out', href: '#/analytics' }, 'connect analytics →'),
+      ),
+    );
+    return;
+  }
+  const top = stats.hits.slice(0, 1)[0];
+  box.replaceChildren(
+    el('div', { class: 'a-mini-stats' },
+      el('div', { class: 'a-mini-stat' },
+        el('span', { class: 'a-mini-stat__num' }, stats.total.toLocaleString()),
+        el('span', { class: 'a-mini-stat__label' }, 'total views'),
+      ),
+      el('div', { class: 'a-mini-stat' },
+        el('span', { class: 'a-mini-stat__num' }, statsWeekTotal().toLocaleString()),
+        el('span', { class: 'a-mini-stat__label' }, 'last 7 days'),
+      ),
+    ),
+    top
+      ? el('div', { class: 'a-dash-top' },
+          el('span', { class: 'a-note' }, `top: `, el('strong', {}, top.title || top.path.replace(/\/$/, '').split('/').pop())),
+          el('span', { class: 'a-mono' }, `${top.count.toLocaleString()} views`),
+        )
+      : null,
+  );
 }
 
 async function refreshDeployCard() {
@@ -638,6 +689,7 @@ function renderPosts(viewEl) {
           isFutureDate(p.data.pubDate) ? el('span', { class: 'a-badge a-badge--run' }, 'scheduled') : null,
         ),
         el('div', { class: 'a-row__date' }, pretty(p.data.pubDate)),
+        el('span', { class: 'a-row__reads', title: 'pageviews (last 60 days)' }, readsTextFor(p.id)),
         el('div', { class: 'a-row__actions' },
           el('button', { class: 'a-mini', title: 'duplicate', onclick: () => duplicatePost(p) }, '⧉'),
           el('button', {
@@ -676,6 +728,16 @@ function renderPosts(viewEl) {
       chip('drafts', 'drafts'),
     );
   }
+
+  // pageview counts fill in as soon as the stats snapshot arrives
+  function readsTextFor(id) {
+    const n = readsFor(id);
+    if (n === null) return '…';
+    return n === 0 ? '0 reads' : `${n.toLocaleString()} reads`;
+  }
+  loadStats().then(() => {
+    if (document.contains(listWrap)) renderPostList();
+  });
 
   viewEl.replaceChildren(
     pageHead('posts', `${state.posts.length} total`, [
@@ -1295,6 +1357,41 @@ function renderEditor(viewEl, id) {
   updateStatus();
 }
 
+// ── analytics ────────────────────────────────
+// stats.json is written by the deploy workflow (GoatCounter → repo) and
+// served same-origin, so no CORS and no third-party keys in the browser.
+async function loadStats() {
+  if (state.stats) return state.stats;
+  try {
+    const res = await fetch(`${BASE}stats.json`, { cache: 'no-store' });
+    if (!res.ok) {
+      state.stats = null;
+      return null;
+    }
+    state.stats = await res.json();
+  } catch {
+    state.stats = null;
+  }
+  return state.stats;
+}
+
+/** pageview count for a post slug (from the stats snapshot), or null */
+function readsFor(slug) {
+  const path = `${BASE}posts/${slug}/`;
+  const hit = (state.stats?.hits || []).find((h) => h.path === path);
+  return hit ? hit.count : null;
+}
+
+function statsWeekTotal() {
+  const days = state.stats?.days || [];
+  return days.slice(-7).reduce((n, d) => n + (d.daily || 0), 0);
+}
+
+function statsMonthTotal() {
+  const days = state.stats?.days || [];
+  return days.slice(-30).reduce((n, d) => n + (d.daily || 0), 0);
+}
+
 // ── media library ────────────────────────────
 async function loadTree() {
   if (!state.tree) state.tree = await state.gh.listTree();
@@ -1790,6 +1887,131 @@ function renderTools(viewEl) {
   );
 }
 
+// ── analytics ────────────────────────────────
+async function renderAnalytics(viewEl) {
+  const stats = await loadStats();
+  const siteCode = store.get(KEYS.analyticsSite);
+  const dashLink = siteCode
+    ? `https://${siteCode}.goatcounter.com/`
+    : 'https://www.goatcounter.com/';
+
+  if (!stats) {
+    viewEl.replaceChildren(
+      pageHead('analytics', 'pageviews & reads', [
+        el('button', { class: 'a-btn', onclick: () => renderAnalytics(viewEl) }, '↻ refresh'),
+      ]),
+      el('div', { class: 'a-card' },
+        el('div', { class: 'a-card__head' }, el('h2', {}, 'no stats yet')),
+        el('p', { class: 'a-note' },
+          'Views are counted by a privacy-friendly GoatCounter beacon (no cookies, no personal data) and snapshotted into the repo on every deploy. To switch it on:',
+        ),
+        el('ol', { class: 'a-steps' },
+          el('li', {}, 'Create a free site at ',
+            el('a', { class: 'a-out', href: 'https://www.goatcounter.com/signup', target: '_blank', rel: 'noopener' }, 'goatcounter.com/signup ↗'),
+          ),
+          el('li', {}, 'Set ',
+            el('code', { class: 'a-mono' }, `analytics: 'your-code'`),
+            ' in ', el('code', { class: 'a-mono' }, 'src/consts.ts'),
+            ' — the counter script loads automatically.',
+          ),
+          el('li', {}, 'Add two repo secrets (Settings → Secrets → Actions): ',
+            el('code', { class: 'a-mono' }, 'GOATCOUNTER_SITE'),
+            ' (your code) and ',
+            el('code', { class: 'a-mono' }, 'GOATCOUNTER_API_KEY'),
+            ' (from GoatCounter → your username → API).',
+          ),
+          el('li', {}, 'Deploy once (or wait for the daily rebuild) — the numbers appear here and on the dashboard.'),
+        ),
+        el('div', { class: 'a-btn-row' },
+          el('a', { class: 'a-btn', href: dashLink, target: '_blank', rel: 'noopener' }, 'goatcounter ↗'),
+        ),
+      ),
+    );
+    return;
+  }
+
+  const days = stats.days || [];
+  const last14 = days.slice(-14);
+  const maxDay = Math.max(1, ...last14.map((d) => d.daily || 0));
+  const bars = last14
+    .map((d, i) => {
+      const h = Math.max(d.daily > 0 ? 1 : 0, Math.round(((d.daily || 0) / maxDay) * 26));
+      const x = (i / last14.length) * 100 + 1;
+      const w = 100 / last14.length - 2;
+      return `<rect x="${x.toFixed(2)}" y="${31 - h}" width="${w.toFixed(2)}" height="${h}" rx="1"/>`;
+    })
+    .join('');
+  const chart = el('svg', {
+    class: 'a-chart',
+    viewBox: '0 0 100 32',
+    preserveAspectRatio: 'none',
+    'aria-hidden': 'true',
+    html: bars,
+  });
+  const chartWrap = el('div', { class: 'a-chart-wrap' },
+    el('div', { class: 'a-chart__axis' },
+      el('span', { class: 'a-mono' }, last14[0]?.day ? pretty(last14[0].day) : ''),
+      el('span', { class: 'a-mono' }, last14[last14.length - 1]?.day ? pretty(last14[last14.length - 1].day) : ''),
+    ),
+    chart,
+  );
+
+  const hits = stats.hits || [];
+  const maxHit = Math.max(1, ...hits.map((h) => h.count || 0));
+  const topRows = hits.slice(0, 10).map((h, i) => {
+    const slug = h.path.startsWith(`${BASE}posts/`) ? h.path.slice(BASE.length + 6).replace(/\/$/, '') : null;
+    const name = h.title || h.path;
+    return el('div', { class: 'a-row' },
+      el('div', { class: 'a-row__main' },
+        el('span', { class: 'a-rank' }, String(i + 1)),
+        slug
+          ? el('a', { class: 'a-row__title', href: `#/edit/${encodeURIComponent(slug)}` }, name)
+          : el('span', { class: 'a-row__title' }, name),
+        el('div', { class: 'a-bar' },
+          el('div', { class: 'a-bar__fill', style: `width:${Math.max(2, Math.round((h.count / maxHit) * 100))}%;` }),
+        ),
+      ),
+      el('div', { class: 'a-row__reads' }, `${(h.count || 0).toLocaleString()} views`),
+      el('div', { class: 'a-row__date' }, el('span', { class: 'a-mono', style: 'font-size:.7rem;color:var(--a-faint);' }, h.path)),
+    );
+  });
+
+  const miniStat = (label, n) =>
+    el('div', { class: 'a-mini-stat' },
+      el('span', { class: 'a-mini-stat__num' }, n.toLocaleString()),
+      el('span', { class: 'a-mini-stat__label' }, label),
+    );
+
+  viewEl.replaceChildren(
+    pageHead('analytics', stats.generated_at ? `snapshot from ${relTime(stats.generated_at)} · refreshes with each deploy` : 'pageviews & reads', [
+      el('a', { class: 'a-out', href: dashLink, target: '_blank', rel: 'noopener' }, 'goatcounter ↗'),
+      el('button', { class: 'a-btn', onclick: renderAnalytics }, '↻ refresh'),
+    ]),
+
+    el('div', { class: 'a-stats' },
+      miniStat('total views', stats.total || 0),
+      miniStat('last 7 days', statsWeekTotal()),
+      miniStat('last 30 days', statsMonthTotal()),
+      miniStat('top post', hits[0] ? hits[0].count || 0 : 0),
+    ),
+
+    el('div', { class: 'a-card' },
+      el('div', { class: 'a-card__head' }, el('h2', {}, 'last 14 days')),
+      chartWrap,
+    ),
+
+    el('div', { class: 'a-card' },
+      el('div', { class: 'a-card__head' },
+        el('h2', {}, 'top posts'),
+        el('span', { class: 'a-note' }, `${hits.length} paths tracked`),
+      ),
+      hits.length === 0
+        ? el('p', { class: 'a-note' }, 'No pageviews recorded yet — share the site and they will show up here.')
+        : el('div', { class: 'a-list' }, ...topRows),
+    ),
+  );
+}
+
 // ── deploy ───────────────────────────────────
 async function renderDeploy(viewEl) {
   const runsWrap = el('div', { id: 'a-runs' });
@@ -1937,6 +2159,26 @@ function renderSettings(viewEl) {
         el('input', { class: 'a-checkbox', type: 'checkbox', id: 's-autolock', checked: autoLockEnabled(),
           onchange: (e) => store.set(KEYS.autoLock, e.target.checked ? '1' : '0') }),
         `auto-lock after ${AUTO_LOCK_MIN} minutes of inactivity`,
+      ),
+    ),
+    el('div', { class: 'a-card' },
+      el('div', { class: 'a-card__head' }, el('h2', {}, 'analytics')),
+      el('p', { class: 'a-note' },
+        'Views are counted by GoatCounter and snapshotted into the repo on each deploy (see the analytics view).',
+      ),
+      el('div', { class: 'a-meta-grid' },
+        el('label', { class: 'a-label' },
+          'goatcounter site code (for the dashboard link)',
+          el('input', {
+            class: 'a-input a-mono', id: 's-analytics-site',
+            placeholder: 'e.g. ayush',
+            value: store.get(KEYS.analyticsSite),
+            oninput: (e) => store.set(KEYS.analyticsSite, e.target.value.trim()),
+          }),
+        ),
+      ),
+      el('p', { class: 'a-hint' },
+        'The API key itself is a repo secret (GOATCOUNTER_API_KEY) — it never touches the browser.',
       ),
     ),
   );

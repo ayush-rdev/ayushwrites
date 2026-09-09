@@ -30,7 +30,11 @@ const prettyUpdated = updatedDate?.toLocaleDateString('en-US', {
   day: 'numeric',
 });
 ---
-<BaseLayout title={title} description={description}>
+<BaseLayout title={title} description={description} ogType="article">
+  <Fragment slot="head">
+    <meta property="article:published_time" content={pubDate.toISOString()} />
+    {updatedDate && <meta property="article:modified_time" content={updatedDate.toISOString()} />}
+  </Fragment>
   <article class="post">
     <p class="post__back">
       <a href={base}>← back to writings</a>

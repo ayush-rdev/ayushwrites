@@ -30,6 +30,44 @@ jobs:
     steps:
       - name: Checkout your repository using git
         uses: actions/checkout@v7
+      # Pull pageview stats from GoatCounter and write them into public/ so
+      # the built site serves stats.json (read by the /admin analytics view).
+      # Guarded: no secrets configured = no stats.json = admin shows the
+      # "connect analytics" state instead of failing.
+      - name: Refresh analytics snapshot
+        if: env.GOATCOUNTER_SITE != '' && env.GOATCOUNTER_API_KEY != ''
+        env:
+          GOATCOUNTER_SITE: ${{ secrets.GOATCOUNTER_SITE }}
+          GOATCOUNTER_API_KEY: ${{ secrets.GOATCOUNTER_API_KEY }}
+        run: |
+          node -e '
+            const site = process.env.GOATCOUNTER_SITE;
+            const key = process.env.GOATCOUNTER_API_KEY;
+            const api = `https://${site}.goatcounter.com/api/v0`;
+            const headers = { Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
+            const days = 60;
+            const start = new Date(Date.now() - days * 864e5).toISOString().slice(0, 13) + ":00:00Z";
+            const end = new Date().toISOString().slice(0, 13) + ":00:00Z";
+            const q = `start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+            const [totalRes, hitsRes] = await Promise.all([
+              fetch(`${api}/stats/total?${q}`, { headers }),
+              fetch(`${api}/stats/hits?${q}&limit=100`, { headers }),
+            ]);
+            if (!totalRes.ok || !hitsRes.ok) throw new Error(`stats fetch failed: ${totalRes.status} ${hitsRes.status}`);
+            const total = await totalRes.json();
+            const hits = await hitsRes.json();
+            const out = {
+              generated_at: new Date().toISOString(),
+              total: total.total || 0,
+              days: (total.stats || []).map((d) => ({ day: d.day, daily: d.daily || 0 })),
+              hits: (hits.hits || [])
+                .filter((h) => !h.event)
+                .map((h) => ({ path: h.path, count: h.count, title: h.title || "" })),
+            };
+            const fs = require("fs");
+            fs.mkdirSync("public", { recursive: true });
+            fs.writeFileSync("public/stats.json", JSON.stringify(out));
+          '
       - name: Install, build, and upload your site
         uses: withastro/action@v6
 

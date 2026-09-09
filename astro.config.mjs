@@ -12,7 +12,12 @@ export default defineConfig({
   site,
   base,
   compressHTML: true,
-  integrations: [sitemap()],
+  integrations: [
+    sitemap({
+      // the admin is noindex'd — keep it out of the sitemap too
+      filter: (page) => !page.includes('/admin/'),
+    }),
+  ],
   // fetch internal pages as soon as they enter the viewport, so the page
   // transition animations never wait on the network
   prefetch: {
