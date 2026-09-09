@@ -8,7 +8,7 @@ export const SITE = {
   /** Your name — used in the hero and footer */
   author: 'Ayush',
   /** Short line used in meta descriptions + RSS feed */
-  description: 'Personal blog of Ayush ( ◜‿◝ ) ♡',
+  description: 'Here I share My thoughts, experiences and useful stuff   that might make your life better',
   /** Canonical site URL — the root domain, WITHOUT the base path (the base
       path is appended automatically via BASE, e.g. og:url = this + base) */
   url: 'https://ayush-rdev.github.io',
