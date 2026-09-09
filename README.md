@@ -66,6 +66,7 @@ npm run preview   # preview the production build
 2. **`astro.config.mjs`** — set `site` to your real domain (used by sitemap + RSS).
 3. **Write posts** — drop Markdown files in `src/content/blog/`. Required
    frontmatter: `title`, `description`, `pubDate`. Optional: `tags`,
+   `category`, `image` (a featured image for the top of the post),
    `updatedDate`, `draft` (hides the post).
 4. **Tune the look** — all colors, fonts, and quirks are CSS custom properties
    at the top of `src/styles/global.css`.The handwritten font (Caveat) is self-hosted via
@@ -78,13 +79,18 @@ that manages the whole blog straight from the browser through the GitHub API —
 no server, no database. Light/dark themes, keyboard-driven, with a sidebar
 layout like any modern SaaS dashboard:
 
+- **lock screen** — a username + password gate (PBKDF2-hashed, per-tab
+  session, brute-force cooldown) in front of the GitHub-token connect
 - **dashboard** — stats (total / published / scheduled / drafts / words),
   quick actions, recent writings, live deploy status of the Actions workflow
 - **posts** — create, edit, delete, duplicate, search, filter by
   published / scheduled / drafts, and one-click publish⇄draft toggling
 - **editor** — a full **WYSIWYG studio** (Toast UI): rich toolbar (bold,
   italic, headings, lists, quotes, links, code, tables, HR…), markdown source
-  view, live word count + reading time, drafts, slugs, tags, copy & download
+  view, live word count + reading time, slugs, tags, **category**, a
+  drag-and-drop **featured image**, and three clear actions —
+  **💾 save draft · 👁 preview · 🚀 publish** (preview renders the post as it
+  will look on the site). Copy & download the raw markdown too
 - **images** — media library with upload / delete / copy-markdown; add images
   to any post via the 🖼 button, drag-and-drop, or paste — uploaded to
   `public/images/` and committed atomically with your save
@@ -109,17 +115,23 @@ Every save is **one atomic commit** to the repo (the git data API) —
 including any attached images — which triggers the deploy workflow; publish
 from the browser, site updates in about a minute.
 
-**One-time setup:** open `/admin`, paste a GitHub **personal access token**
-with contents read & write on this repo (a
+**One-time setup:** open `/admin`, sign in with the admin username +
+password (they live as a salted PBKDF2 digest in `src/scripts/admin/auth.js`),
+then paste a GitHub **personal access token** with contents read & write on
+this repo (a
 [fine-grained token](https://github.com/settings/personal-access-tokens/new)
 scoped to this repo — a classic token with broad scopes gets flagged by the
 admin). The token lives only in your browser's `localStorage` and talks to
 `api.github.com` directly; use the **lock** button to forget it.
 
+> On a static host the password check runs in the browser — it keeps casual
+> visitors and scanners out, but the GitHub token is the real
+> write-credential, so keep it safe.
+
 The admin's code lives in `src/pages/admin.astro` (shell) +
 `src/styles/admin.css` (design system), and `src/scripts/admin/`
 (`app.js` SPA, `github.js` API client, `content.js` frontmatter/consts
-helpers, `editor-tools.js` image pipeline).
+helpers, `editor-tools.js` image pipeline, `auth.js` password gate).
 
 ## deploying
 

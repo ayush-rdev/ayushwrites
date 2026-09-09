@@ -1149,6 +1149,192 @@ body.a-body .page {
   position: relative;
 }
 
+/* ── lock screen: password → token divider ── */
+
+.a-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 1.1rem 0 0.8rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--a-faint);
+}
+
+.a-divider::before,
+.a-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--a-border);
+}
+
+/* ── featured-image uploader ───────────────── */
+
+.a-hero {
+  margin: 0.8rem 0 0;
+  border: 1.5px dashed var(--a-border-strong);
+  border-radius: 10px;
+  background: var(--a-surface);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.a-hero--drag {
+  border-color: var(--a-accent);
+  background: var(--a-accent-soft);
+}
+
+.a-hero__empty {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.85rem;
+  color: var(--a-muted);
+}
+
+.a-hero__icon {
+  font-size: 1rem;
+}
+
+.a-hero__hint {
+  flex-basis: 100%;
+  font-size: 0.72rem;
+  color: var(--a-faint);
+}
+
+.a-hero__preview {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.6rem 0.8rem;
+}
+
+.a-hero__preview img {
+  width: 7rem;
+  height: 4.5rem;
+  object-fit: cover;
+  border: 1px solid var(--a-border-strong);
+  border-radius: 8px;
+}
+
+.a-hero__meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.a-hero__name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--a-text);
+}
+
+/* ── post preview modal ────────────────────── */
+
+body.a-locked {
+  overflow: hidden;
+}
+
+.a-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 4vh 1rem 3rem;
+  background: color-mix(in srgb, var(--a-bg) 82%, transparent);
+  backdrop-filter: blur(3px);
+  overflow-y: auto;
+}
+
+.a-preview {
+  width: min(44rem, 100%);
+  background: var(--a-surface);
+  border: 1px solid var(--a-border-strong);
+  border-radius: 14px;
+  box-shadow: var(--a-shadow);
+  padding: 1.6rem 2rem 1.4rem;
+  margin: auto 0;
+}
+
+.a-preview__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.a-preview__title {
+  margin: 0;
+  font-size: 1.7rem;
+  line-height: 1.2;
+}
+
+.a-preview__meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  margin: 0.55rem 0 0.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  color: var(--a-muted);
+}
+
+.a-preview__cat {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--a-accent);
+}
+
+.a-preview__body {
+  margin-top: 0.9rem;
+}
+
+.a-preview__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: 1.2rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--a-border);
+  font-size: 0.76rem;
+  color: var(--a-muted);
+}
+
+/* ── category chip in the posts list ───────── */
+
+.a-cat {
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--a-accent);
+  white-space: nowrap;
+}
+
+/* toolbar left group (stats + status) */
+.a-toolbar__left {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.78rem;
+  color: var(--a-muted);
+}
+
 /* ── responsive ────────────────────────────── */
 
 @media (max-width: 900px) {

@@ -460,6 +460,17 @@ html.theme-switching::view-transition-new(root) {
   color: var(--ink-soft);
 }
 
+.post-card__meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.7rem;
+}
+
+.post-card__meta .cat {
+  font-size: 0.7rem;
+}
+
 .post-card h3 {
   margin: 0.15rem 0 0.2rem;
   font-size: 1.13rem;
@@ -545,6 +556,26 @@ html.theme-switching::view-transition-new(root) {
 
 .post__meta .tags {
   margin-top: 0;
+}
+
+/* category label — a quieter, mono sibling of the date line */
+.cat {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+/* featured image at the top of a post */
+.post__hero {
+  display: block;
+  width: 100%;
+  max-height: 24rem;
+  object-fit: cover;
+  margin: 0.4rem 0 0;
+  border: 1.5px solid var(--ink);
+  border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
 }
 
 .squiggle-divider {

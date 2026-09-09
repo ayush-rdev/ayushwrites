@@ -29,7 +29,14 @@ async function loadFflate() {
   return fflateMod;
 }
 
+let markedMod = null;
+async function loadMarked() {
+  if (!markedMod) markedMod = await import('marked');
+  return markedMod;
+}
+
 import { GitHub } from './github.js';
+import { checkPassword, isSessionOpen, openSession, closeSession, lockoutRemainingMs } from './auth.js';
 import { fileToBase64, baseName, imagePathFor, MAX_IMAGE_BYTES } from './editor-tools.js';
 import {
   parseFrontmatter,
@@ -197,6 +204,34 @@ function lockVisible(on) {
 }
 
 async function connect(silent = false) {
+  // password gate — the token step below is the real write-credential, but
+  // the password keeps everyone who doesn't have it off the admin entirely
+  const cooldown = lockoutRemainingMs();
+  if (cooldown > 0) {
+    if (!silent) toast(`too many attempts — try again in ${Math.ceil(cooldown / 1000)}s`, 'error');
+    return;
+  }
+  let pwOk = false;
+  try {
+    const res = await checkPassword($('#a-username').value, $('#a-password').value);
+    if (res.locked) {
+      if (!silent) toast('too many attempts — try again in a minute', 'error');
+      return;
+    }
+    pwOk = res.ok;
+  } catch (e) {
+    console.error('password check failed:', e);
+    if (!silent) toast('password check unavailable — open the admin over https', 'error');
+    return;
+  }
+  if (!pwOk) {
+    if (!silent) toast('wrong username or password', 'error');
+    $('#a-password').value = '';
+    $('#a-password').focus();
+    return;
+  }
+  openSession();
+
   const token = $('#a-token').value.trim();
   let owner = $('#a-owner').value.trim();
   const repo = $('#a-repo').value.trim();
@@ -238,7 +273,7 @@ async function connect(silent = false) {
     lockVisible(true);
     if (btn) {
       btn.disabled = false;
-      btn.textContent = 'connect';
+      btn.textContent = 'sign in';
     }
   }
 }
@@ -597,6 +632,7 @@ function renderPosts(viewEl) {
       el('div', { class: 'a-row' },
         el('div', { class: 'a-row__main' },
           el('a', { class: 'a-row__title', href: `#/edit/${encodeURIComponent(p.id)}` }, p.data.title || p.id),
+          p.data.category ? el('span', { class: 'a-cat' }, p.data.category) : null,
           (p.data.tags || []).slice(0, 3).map((t) => el('span', { class: 'a-tag' }, `#${t}`)),
           p.data.draft ? el('span', { class: 'a-badge a-badge--draft' }, 'draft') : null,
           isFutureDate(p.data.pubDate) ? el('span', { class: 'a-badge a-badge--run' }, 'scheduled') : null,
@@ -745,7 +781,19 @@ function renderEditor(viewEl, id) {
       updatePathHint();
     },
   });
-  const draftBox = el('input', { class: 'a-checkbox', type: 'checkbox', id: 'f-draft', checked: !!src.data.draft });
+  // current draft state — the save buttons are authoritative (no checkbox)
+  let draftState = !!src.data.draft;
+
+  const categoryInput = el('input', {
+    class: 'a-input', id: 'f-category', list: 'f-category-list',
+    placeholder: 'e.g. tools, essays, notes',
+    value: src.data.category || '',
+    oninput: markDirty,
+  });
+  const categoryList = el('datalist', { id: 'f-category-list' });
+  const knownCategories = [...new Set(state.posts.map((p) => p.data.category).filter(Boolean))].sort();
+  categoryList.replaceChildren(...knownCategories.map((c) => el('option', { value: c })));
+
   const descInput = el('input', {
     class: 'a-input', id: 'f-desc', placeholder: 'one line for cards, meta & RSS',
     value: src.data.description || '',
@@ -756,6 +804,89 @@ function renderEditor(viewEl, id) {
     value: (src.data.tags || []).join(', '),
     oninput: markDirty,
   });
+
+  // ── featured image ──
+  // hero = { url, file? } — url is what gets saved in frontmatter; file is a
+  // freshly picked image staged for the next commit (shows as a data-url until saved)
+  let hero = { url: src.data.image || '', file: null };
+  const heroInput = el('input', { type: 'file', accept: 'image/*', hidden: true });
+  const heroZone = el('div', { class: 'a-hero' });
+  function renderHero() {
+    const active = hero.file ? hero.file.dataUrl : (hero.url || '');
+    if (!active) {
+      heroZone.replaceChildren(
+        el('div', { class: 'a-hero__empty' },
+          el('span', { class: 'a-hero__icon' }, '🖼'),
+          el('span', {}, 'featured image — drag & drop or'),
+          el('button', { class: 'a-btn a-btn--sm', type: 'button', onclick: () => heroInput.click() }, 'choose'),
+          el('span', { class: 'a-hero__hint' }, 'shown at the top of the post'),
+        ),
+      );
+      return;
+    }
+    const name = hero.file ? hero.file.name : hero.url.split('/').pop();
+    heroZone.replaceChildren(
+      el('div', { class: 'a-hero__preview' },
+        el('img', { src: active, alt: '' }),
+        el('div', { class: 'a-hero__meta' },
+          el('span', { class: 'a-hero__name', title: name }, name),
+          el('div', { class: 'a-btn-row' },
+            el('button', { class: 'a-mini', type: 'button', onclick: () => heroInput.click() }, 'replace'),
+            el('button', { class: 'a-mini a-mini--danger', type: 'button', onclick: clearHero }, 'remove'),
+          ),
+        ),
+      ),
+    );
+  }
+  function clearHero() {
+    hero = { url: '', file: null };
+    renderHero();
+    markDirty();
+  }
+  async function pickHeroFile(file) {
+    if (actionBusy) {
+      toast('wait for the current save to finish first', 'info');
+      return;
+    }
+    if (!file.type.startsWith('image/')) return;
+    if (file.size > MAX_IMAGE_BYTES) {
+      toast(`${file.name} is over 8 MB — skipped`, 'error');
+      return;
+    }
+    const b64 = await fileToBase64(file);
+    const { filename, path } = imagePathFor(file);
+    hero = {
+      url: `${BASE}images/${filename}`,
+      file: { path, content: b64, encoding: 'base64', name: file.name, size: file.size, dataUrl: `data:${file.type};base64,${b64}` },
+    };
+    renderHero();
+    markDirty();
+  }
+  heroInput.addEventListener('change', () => {
+    const f = heroInput.files?.[0];
+    heroInput.value = '';
+    if (f) pickHeroFile(f);
+  });
+  ['dragenter', 'dragover'].forEach((ev) =>
+    heroZone.addEventListener(ev, (e) => {
+      if (e.dataTransfer?.types?.includes('Files')) {
+        e.preventDefault();
+        heroZone.classList.add('a-hero--drag');
+      }
+    }),
+  );
+  ['dragleave', 'drop'].forEach((ev) =>
+    heroZone.addEventListener(ev, (e) => {
+      if (ev === 'dragleave' && heroZone.contains(e.relatedTarget)) return;
+      e.preventDefault();
+      heroZone.classList.remove('a-hero--drag');
+      if (ev === 'drop') {
+        const f = e.dataTransfer?.files?.[0];
+        if (f) pickHeroFile(f);
+      }
+    }),
+  );
+  renderHero();
 
   const editorHost = el('div', { class: 'a-editor-host' }, el('p', { class: 'a-note' }, 'loading editor…'));
   let editor = null;
@@ -889,9 +1020,31 @@ function renderEditor(viewEl, id) {
     dirtyDot.hidden = false;
   }
 
-  const saveBtn = el('button', { class: 'a-btn a-btn--primary', onclick: save }, 'save & publish');
+  const saveDraftBtn = el('button', { class: 'a-btn', onclick: () => save(true) }, '💾 save draft');
+  const previewBtn = el('button', { class: 'a-btn', onclick: preview }, '👁 preview');
+  const publishBtn = el('button', { class: 'a-btn a-btn--primary', onclick: () => save(false) }, '🚀 publish');
+  const statusBadge = el('span', { class: 'a-badge', hidden: true });
+  function updateStatus() {
+    if (draftState) {
+      statusBadge.textContent = 'draft';
+      statusBadge.className = 'a-badge a-badge--draft';
+    } else if (isFutureDate(pubDate.value)) {
+      statusBadge.textContent = 'scheduled';
+      statusBadge.className = 'a-badge a-badge--run';
+    } else {
+      statusBadge.textContent = 'published';
+      statusBadge.className = 'a-badge a-badge--ok';
+    }
+    statusBadge.hidden = false;
+  }
 
-  async function save() {
+  function setSaveBusy(on) {
+    saveDraftBtn.disabled = on;
+    publishBtn.disabled = on;
+    if (on) previewBtn.disabled = true;
+  }
+
+  async function save(forceDraft) {
     if (actionBusy) return;
     if (!editor) {
       toast('editor still loading — wait a second', 'info');
@@ -913,9 +1066,10 @@ function renderEditor(viewEl, id) {
     }
     const date = pubDate.value || todayStr();
     const tags = tagsInput.value.split(',').map((s) => s.trim()).filter(Boolean);
+    const category = categoryInput.value.trim();
     // future-dated posts are NOT force-drafted: the site hides them at build
     // time until their date, and the daily rebuild publishes them then
-    const draft = draftBox.checked;
+    const draft = !!forceDraft;
     const scheduled = !draft && isFutureDate(date);
 
     const content = buildPostMarkdown({
@@ -924,6 +1078,8 @@ function renderEditor(viewEl, id) {
       pubDate: date,
       updatedDate: updatedDate.value || undefined,
       tags,
+      category: category || undefined,
+      image: hero.url || undefined,
       draft,
       body: currentMarkdown(),
     });
@@ -931,16 +1087,21 @@ function renderEditor(viewEl, id) {
     // snapshot BEFORE the await — images staged while the commit is in flight
     // must not be dropped (and won't be part of this commit either)
     const staged = pendingImages.slice();
+    const heroFile = hero.file ? { ...hero.file } : null;
     const files = [];
     if (existing && existing.path !== newPath) files.push({ path: existing.path, delete: true });
     files.push({ path: newPath, content });
     for (const img of staged) files.push({ path: img.path, content: img.content, encoding: 'base64' });
+    if (heroFile) files.push({ path: heroFile.path, content: heroFile.content, encoding: 'base64' });
 
     actionBusy = true;
-    saveBtn.disabled = true;
+    setSaveBusy(true);
     setBusy(true);
     try {
-      await state.gh.commitFiles(files, existing ? `✏️ update · ${title}` : `✍️ new post · ${title}`);
+      await state.gh.commitFiles(
+        files,
+        existing ? `✏️ update · ${title}` : (draft ? `📝 new draft · ${title}` : `✍️ new post · ${title}`),
+      );
       const { data, body } = parseFrontmatter(content);
       const post = { id: slug, path: newPath, data, body };
       const idx = existing ? state.posts.findIndex((p) => p.id === existing.id) : -1;
@@ -949,19 +1110,21 @@ function renderEditor(viewEl, id) {
       state.posts.sort((a, b) => String(b.data.pubDate || '').localeCompare(String(a.data.pubDate || '')));
       state.dirty = false;
       dirtyDot.hidden = true;
+      draftState = draft;
+      updateStatus();
       // drop only the images this commit actually uploaded
       for (const img of staged) {
         const i = pendingImages.indexOf(img);
         if (i !== -1) pendingImages.splice(i, 1);
       }
+      if (heroFile) hero = { url: hero.url, file: null };
       renderChips();
+      renderHero();
       state.tree = null;
-      toast(
-        existing
-          ? (scheduled ? 'post saved — scheduled for the publish date' : 'post updated — deploy running')
-          : (scheduled ? 'post scheduled — hidden until the publish date' : 'post published — deploy running'),
-        'success',
-      );
+      const msg = draft
+        ? 'draft saved — hidden from the site'
+        : (scheduled ? 'post scheduled — hidden until the publish date' : (existing ? 'post updated — deploy running' : 'post published — deploy running'));
+      toast(msg, 'success');
       if (!existing) {
         location.hash = `#/edit/${encodeURIComponent(slug)}`;
       } else {
@@ -971,7 +1134,7 @@ function renderEditor(viewEl, id) {
       toast(e.message || 'save failed', 'error');
     } finally {
       actionBusy = false;
-      saveBtn.disabled = false;
+      setSaveBusy(false);
       setBusy(false);
     }
   }
@@ -983,7 +1146,9 @@ function renderEditor(viewEl, id) {
       pubDate: pubDate.value || todayStr(),
       updatedDate: updatedDate.value || undefined,
       tags: tagsInput.value.split(',').map((s) => s.trim()).filter(Boolean),
-      draft: draftBox.checked,
+      category: categoryInput.value.trim() || undefined,
+      image: hero.url || undefined,
+      draft: draftState,
       body: currentMarkdown(),
     });
   }
@@ -1010,6 +1175,70 @@ function renderEditor(viewEl, id) {
     URL.revokeObjectURL(a.href);
   }
 
+  // ── post preview (rendered with the same markdown engine the editor uses) ──
+  async function preview() {
+    let marked;
+    try {
+      ({ marked } = await loadMarked());
+    } catch (err) {
+      console.error(err);
+      toast('could not load the preview renderer', 'error');
+      return;
+    }
+    const title = titleInput.value.trim() || 'untitled';
+    const date = pubDate.value || todayStr();
+    const category = categoryInput.value.trim();
+    const tags = tagsInput.value.split(',').map((s) => s.trim()).filter(Boolean);
+    const heroUrl = hero.file ? hero.file.dataUrl : (hero.url || '');
+    const md = currentMarkdown();
+
+    const metaBits = [
+      el('time', { datetime: date }, pretty(date)),
+      category ? el('span', { class: 'a-preview__cat' }, category) : null,
+      ...tags.map((t) => el('span', { class: 'a-tag' }, `#${t}`)),
+    ].filter(Boolean);
+
+    const body = el('div', { class: 'prose' });
+    body.innerHTML = marked.parse(md, { gfm: true, breaks: false });
+
+    const closeBtn = el('button', { class: 'a-mini', type: 'button', 'aria-label': 'close preview' }, '✕');
+    const overlay = el('div', { class: 'a-overlay' });
+    overlay.append(
+      el('div', { class: 'a-preview' },
+        el('div', { class: 'a-preview__head' },
+          el('h1', { class: 'a-preview__title' }, title),
+          closeBtn,
+        ),
+        el('div', { class: 'a-preview__meta' }, ...metaBits),
+        heroUrl ? el('img', { class: 'post__hero', src: heroUrl, alt: '' }) : null,
+        el('div', { class: 'a-preview__body' }, body),
+        el('div', { class: 'a-preview__foot' },
+          el('span', { class: 'a-mono' }, `${countWords(md)} words · ${Math.max(1, Math.ceil(countWords(md) / 220))} min read`),
+          el('button', { class: 'a-btn a-btn--sm', type: 'button' }, 'close'),
+        ),
+      ),
+    );
+    document.body.append(overlay);
+    document.body.classList.add('a-locked');
+
+    function close() {
+      document.removeEventListener('keydown', onKey);
+      document.body.classList.remove('a-locked');
+      overlay.remove();
+      titleInput.focus();
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKey);
+    closeBtn.addEventListener('click', close);
+    overlay.querySelector('.a-preview__foot .a-btn').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    closeBtn.focus();
+  }
+
   viewEl.replaceChildren(
     el('div', {},
       el('div', { class: 'a-editor__head' },
@@ -1018,7 +1247,9 @@ function renderEditor(viewEl, id) {
           existing
             ? el('button', { class: 'a-btn a-btn--danger a-btn--sm', onclick: () => deletePost(existing) }, 'delete')
             : null,
-          saveBtn,
+          saveDraftBtn,
+          previewBtn,
+          publishBtn,
         ),
       ),
 
@@ -1028,7 +1259,7 @@ function renderEditor(viewEl, id) {
         el('label', { class: 'a-label' }, 'published', pubDate),
         el('label', { class: 'a-label' }, 'updated', updatedDate),
         el('label', { class: 'a-label' }, 'slug', slugInput),
-        el('label', { class: 'a-label a-check', style: 'justify-content:flex-end;' }, draftBox, 'draft (hidden)'),
+        el('label', { class: 'a-label' }, 'category', categoryInput, categoryList),
       ),
 
       el('div', { class: 'a-meta-grid' },
@@ -1037,9 +1268,11 @@ function renderEditor(viewEl, id) {
       ),
 
       scheduleNote,
+      heroZone,
+      heroInput,
 
       el('div', { class: 'a-toolbar' },
-        el('div', {}, stats, dirtyDot),
+        el('div', { class: 'a-toolbar__left' }, stats, statusBadge, dirtyDot),
         el('div', { class: 'a-toolbar__right' },
           el('button', { class: 'a-mini', onclick: copyMd }, 'copy md'),
           el('button', { class: 'a-mini', onclick: downloadMd }, 'download'),
@@ -1059,6 +1292,7 @@ function renderEditor(viewEl, id) {
   updateSchedule();
   updatePathHint();
   updateStats();
+  updateStatus();
 }
 
 // ── media library ────────────────────────────
@@ -1929,13 +2163,14 @@ function syncThemeBtn() {
 // ── lock / bootstrap ─────────────────────────
 function showLock() {
   lockVisible(true);
+  $('#a-password').value = '';
   $('#a-token').value = store.get(KEYS.token);
   $('#a-owner').value = store.get(KEYS.owner) || defaultOwner();
   $('#a-repo').value = store.get(KEYS.repo) || defaultRepo();
   const btn = $('#a-connect');
   if (btn) {
     btn.disabled = false;
-    btn.textContent = 'connect';
+    btn.textContent = 'sign in';
   }
 }
 
@@ -1965,9 +2200,11 @@ function forceLock() {
   state.dirty = false;
   state.scopeWarn = null;
   store.clear();
+  closeSession();
   location.hash = '#/dashboard';
   lockVisible(true);
   $('#a-token').value = '';
+  $('#a-password').value = '';
   $('#a-view').replaceChildren();
 }
 
@@ -2005,6 +2242,9 @@ export function mount() {
   syncThemeBtn();
 
   $('#a-token').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') connect(false);
+  });
+  $('#a-password').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') connect(false);
   });
 
@@ -2050,9 +2290,10 @@ export function mount() {
     { attributes: true, attributeFilter: ['data-theme'] },
   );
 
-  // auto-connect if a token is stored
+  // auto-connect only if the password session is open AND a token is stored —
+  // a stored token alone is not enough (the session dies with the tab)
   const token = store.get(KEYS.token);
-  if (token) {
+  if (token && isSessionOpen()) {
     $('#a-token').value = token;
     $('#a-owner').value = store.get(KEYS.owner) || defaultOwner();
     $('#a-repo').value = store.get(KEYS.repo) || defaultRepo();

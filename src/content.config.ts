@@ -10,6 +10,10 @@ const blog = defineCollection({
     pubDate: z.coerce.date(),
     updatedDate: z.coerce.date().optional(),
     tags: z.array(z.string()).default([]),
+    // one category for the post — shown on cards and the article page
+    category: z.string().optional(),
+    // featured image — a site-relative path (e.g. '/ayushwrites/images/…')
+    image: z.string().optional(),
     // set draft: true to hide a post from listings and the RSS feed
     draft: z.boolean().default(false),
   }),

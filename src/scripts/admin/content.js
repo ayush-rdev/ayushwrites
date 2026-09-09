@@ -96,6 +96,8 @@ export function buildPostMarkdown({
   pubDate,
   updatedDate,
   tags,
+  category,
+  image,
   draft,
   body,
 }) {
@@ -104,6 +106,8 @@ export function buildPostMarkdown({
   lines.push(`description: ${q(description)}`);
   lines.push(`pubDate: '${pubDate}'`);
   if (updatedDate) lines.push(`updatedDate: '${updatedDate}'`);
+  if (category) lines.push(`category: ${q(category)}`);
+  if (image) lines.push(`image: ${q(image)}`);
   lines.push(`tags: [${(tags || []).map((t) => q(t)).join(', ')}]`);
   lines.push(`draft: ${draft ? 'true' : 'false'}`);
   lines.push('---');

@@ -12,7 +12,7 @@ const defaultOwner = SITE.url ? new URL(SITE.url).hostname.split('.')[0] : '';
   </Fragment>
 
   <!-- lock screen -->
-  <section id="a-lock" class="a-lock-wrap" hidden>
+  <section id="a-lock-wrap" class="a-lock-wrap" hidden>
     <div class="a-lock">
       <div class="a-lock__card">
         <div class="a-lock__brand">
@@ -20,6 +20,17 @@ const defaultOwner = SITE.url ? new URL(SITE.url).hostname.split('.')[0] : '';
           <span class="tag">admin</span>
         </div>
         <p class="a-lock__sub">Sign in to manage your blog.</p>
+
+        <label class="a-label">
+          username
+          <input id="a-username" class="a-input a-mono" value="Admin - AyushWrites" autocomplete="username" spellcheck="false" />
+        </label>
+        <label class="a-label" style="margin-top: .7rem;">
+          password
+          <input id="a-password" class="a-input a-mono" type="password" autocomplete="current-password" placeholder="••••••••" />
+        </label>
+
+        <div class="a-divider">then · connect to github</div>
 
         <label class="a-label">
           GitHub personal access token
@@ -38,12 +49,14 @@ const defaultOwner = SITE.url ? new URL(SITE.url).hostname.split('.')[0] : '';
         </div>
 
         <div class="a-btn-row" style="margin-top: .9rem;">
-          <button id="a-connect" class="a-btn a-btn--primary" type="button">connect</button>
+          <button id="a-connect" class="a-btn a-btn--primary" type="button">sign in</button>
         </div>
 
         <p class="a-lock__hint">
-          The token only lives in your browser (localStorage) and talks to the GitHub
-          API directly — every save is a commit and the deploy workflow runs it.
+          The password only unlocks this screen in your browser — the GitHub token
+          below is what actually saves to your repo. The token lives only in your
+          browser (localStorage), talks to the GitHub API directly, and every save
+          is a commit that runs the deploy workflow.
           <br />
           <strong>Prefer a fine-grained token</strong> scoped to just this repo with
           Contents: read &amp; write. A classic token with broad scopes will be flagged

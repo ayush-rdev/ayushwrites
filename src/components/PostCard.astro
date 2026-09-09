@@ -8,7 +8,7 @@ interface Props {
 
 const base = BASE;
 const { post } = Astro.props;
-const { title, description, pubDate, tags } = post.data;
+const { title, description, pubDate, tags, category } = post.data;
 
 const prettyDate = pubDate.toLocaleDateString('en-US', {
   year: 'numeric',
@@ -18,7 +18,10 @@ const prettyDate = pubDate.toLocaleDateString('en-US', {
 ---
 
 <a class="post-card" href={`${base}posts/${post.id}/`}>
-  <time class="date" datetime={pubDate.toISOString()}>{prettyDate}</time>
+  <div class="post-card__meta">
+    <time class="date" datetime={pubDate.toISOString()}>{prettyDate}</time>
+    {category && <span class="cat">in {category}</span>}
+  </div>
   <h3>{title}</h3>
   <p>{description}</p>
   {
