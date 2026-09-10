@@ -4,7 +4,9 @@ description: 'the humble tools behind this site — and most of my days.'
 pubDate: '2026-07-28'
 updatedDate: '2026-08-02'
 tags: ['setup', 'tools']
+draft: true
 ---
+
 
 Everyone has a setup post eventually. This is mine — nothing exotic, nothing sponsored, just the things that actually earn their place.
 
