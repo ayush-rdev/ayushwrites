@@ -1,7 +1,7 @@
 ---
 title: "AI and Civilization"
 description: "Your description of the article goes here."
-pubDate: 2023-10-25
+pubDate: 2026-09-20
 ---
 # Why People Say AI Will Change Human Civilization — And What the Next 5 Years Actually Look Like
 
