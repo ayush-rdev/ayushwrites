@@ -1,3 +1,8 @@
+---
+title: "AI and Civilization"
+description: "Your description of the article goes here."
+pubDate: 2023-10-25
+---
 # Why People Say AI Will Change Human Civilization — And What the Next 5 Years Actually Look Like
 
 *A deep-research briefing. Data as of September 2026. Written for a curious reader starting from zero — we go from "what is machine learning" to "what happens by 2031," with real numbers and real names.*
